@@ -356,10 +356,27 @@ def _lg_ssh(ip, mode, secret):
     except Exception:
         raise RuntimeError("ما قدرت أجيب مفتاح الشاشة. افتح تطبيق Developer Mode في الشاشة "
                            "وفعّل Key Server ثم حاول مرة ثانية.")
-    try:
-        key = paramiko.RSAKey.from_private_key(io.StringIO(pem), password=secret.strip())
-    except Exception:
-        raise RuntimeError("عبارة المرور (Passphrase) غير صحيحة. انسخها كما تظهر في تطبيق Developer Mode.")
+    if "PRIVATE KEY" not in pem:
+        raise RuntimeError("الشاشة رجّعت شيء غير المفتاح. أطفئ Key Server وشغّله من جديد في تطبيق Developer Mode.\n"
+                           "أول سطر وصل: " + (pem.strip().splitlines() or ["(فاضي)"])[0][:80])
+    key, errors = None, []
+    raw = secret.strip()
+    for cls_name in ("RSAKey", "Ed25519Key", "ECDSAKey"):
+        cls = getattr(paramiko, cls_name, None)
+        if cls is None:
+            continue
+        for pw in dict.fromkeys([raw, raw.upper(), raw.lower()]):
+            try:
+                key = cls.from_private_key(io.StringIO(pem), password=pw)
+                break
+            except Exception as e:
+                errors.append("%s: %s" % (cls_name, e))
+        if key:
+            break
+    if key is None:
+        raise RuntimeError("ما قدرت أفتح مفتاح الشاشة بالـ Passphrase هذي.\n"
+                           "نوع المفتاح: " + pem.strip().splitlines()[0][:60] + "\n"
+                           "التفاصيل: " + " | ".join(dict.fromkeys(errors))[-600:])
     try:
         client.connect(ip, port=9922, username="prisoner", pkey=key, **common)
     except paramiko.AuthenticationException:
