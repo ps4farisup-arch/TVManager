@@ -166,6 +166,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;col
 .place .nm{font-size:1.75vw;font-weight:600;line-height:1.4;direction:rtl}
 .place .nav{font-size:1.05vw;direction:rtl}
 
+#credit{position:fixed;bottom:.9vh;left:4vw;font-size:.8vw;opacity:.55;direction:rtl;text-align:left;max-width:60vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #hint{position:fixed;top:1.4vh;left:0;right:0;text-align:center;font-size:1vw;opacity:.7;-webkit-transition:opacity 2s;transition:opacity 2s}
 #picker{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(5,6,10,.9)}
 #picker h2{font-size:2.2vw;font-weight:600;text-align:center;margin:6vh 0 2.5vh;color:#d9b46a}
@@ -192,6 +193,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;col
     <div class="place"><div class="lbl" id="placeTag"></div><div class="nm" id="placeName"></div><div class="nav muted">◀ ▶ لتغيير الخلفية</div></div>
   </div>
 </div>
+<div id="credit"></div>
 <video id="keep" muted loop playsinline autoplay style="position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none"></video>
 <div id="hint">اضغط OK لتغيير الدولة والمدينة</div>
 <div id="picker"><h2 id="pickTitle">اختر دولتك</h2><div id="list"></div></div>
@@ -373,7 +375,10 @@ function showVerse(v){ $('verse').innerHTML = '﴿' + v.text + '﴾'; $('verseSr
 function buildBg(){
   var i;
   if (CFG.photos && CFG.photos.length){
-    for (i = 0; i < CFG.photos.length; i++) BG.push({photo: CFG.photos[i], name: 'صورة ' + ar(i + 1) + ' من ' + ar(CFG.photos.length), tag: 'صوري'});
+    for (i = 0; i < CFG.photos.length; i++){
+      var ph = CFG.photos[i];
+      BG.push({photo: ph[0], name: ph[1] || ('صورة ' + ar(i + 1) + ' من ' + ar(CFG.photos.length)), tag: ph[2] || 'صوري', credit: ph[3] || ''});
+    }
   }
   if (!BG.length || CFG.mix){
     for (i = 0; i < CFG.scenes.length; i++) BG.push({scene: CFG.scenes[i][3], name: CFG.scenes[i][0] + ' · ' + CFG.scenes[i][1], tag: CFG.scenes[i][2]});
@@ -394,6 +399,7 @@ function setBg(i){
   layerA = !layerA;
   $('placeTag').innerHTML = b.tag;
   $('placeName').innerHTML = b.name;
+  $('credit').innerHTML = b.credit || '';
 }
 
 /* منع توفير الطاقة وشاشة التوقف طالما التطبيق مفتوح */
@@ -510,6 +516,28 @@ FONT_SOURCES = {
         "https://cdn.jsdelivr.net/fontsource/fonts/amiri@latest/arabic-400-normal.woff2"]),
 }
 FONT_DIR = os.path.join(os.path.expanduser("~"), ".tv_manager_fonts")
+GOOGLE_CSS = {
+    "ShUI": "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600&display=swap",
+    "ShQ": "https://fonts.googleapis.com/css2?family=Amiri&display=swap",
+}
+UA_BROWSER = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+
+def _google_font_url(family, weight, subset):
+    """يقرأ ملف CSS من Google Fonts ويطلع رابط ملف الخط للوزن واللغة المطلوبة."""
+    import re
+    import urllib.request
+    req = urllib.request.Request(GOOGLE_CSS[family], headers={"User-Agent": UA_BROWSER})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        css = r.read().decode("utf-8", "ignore")
+    for m in re.finditer(r"/\*\s*([\w-]+)\s*\*/\s*@font-face\s*{(.*?)}", css, re.S):
+        sub, body = m.group(1), m.group(2)
+        w = re.search(r"font-weight:\s*(\d+)", body)
+        u = re.search(r"url\((https://[^)]+\.woff2)\)", body)
+        if sub == subset and u and (not w or int(w.group(1)) == weight):
+            return u.group(1)
+    return None
 
 
 def ensure_fonts(log=None):
@@ -520,6 +548,13 @@ def ensure_fonts(log=None):
     for key, (fname, family, weight, urls) in FONT_SOURCES.items():
         path = os.path.join(FONT_DIR, fname)
         if not os.path.isfile(path) or os.path.getsize(path) < 2000:
+            urls = list(urls)
+            try:
+                g = _google_font_url(family, weight, "latin" if "-la-" in fname else "arabic")
+                if g:
+                    urls.append(g)
+            except Exception:
+                pass
             for u in urls:
                 try:
                     req = urllib.request.Request(u, headers={"User-Agent": "TVManager/1.0"})
@@ -564,6 +599,114 @@ def photo_names():
     return sorted(names, key=lambda n: (len(n), n))
 
 
+def photo_meta(name):
+    try:
+        with open(os.path.join(PHOTO_DIR, name[:-4] + ".json"), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_photo(data, meta=None):
+    os.makedirs(PHOTO_DIR, exist_ok=True)
+    nums = [int(n[:-4]) for n in photo_names() if n[:-4].isdigit()]
+    n = max(nums + [0]) + 1
+    with open(os.path.join(PHOTO_DIR, "%d.jpg" % n), "wb") as f:
+        f.write(data)
+    if meta:
+        with open(os.path.join(PHOTO_DIR, "%d.json" % n), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False)
+    return n
+
+
+def clear_photos():
+    try:
+        for n in os.listdir(PHOTO_DIR):
+            if n.endswith((".jpg", ".json")):
+                os.remove(os.path.join(PHOTO_DIR, n))
+    except OSError:
+        pass
+
+
+# صور مرخّصة ترخيصاً حراً من ويكيميديا كومنز، مع ذكر المصوّر والترخيص على الشاشة
+STOCK_QUERIES = [
+    ("العلا", "الحِجر", "تراث", "Hegra Mada'in Salih tomb"),
+    ("العلا", "جبل الفيل", "طبيعة", "Elephant Rock AlUla"),
+    ("العلا", "مرايا", "رؤية ٢٠٣٠", "Maraya AlUla"),
+    ("العلا", "الطبيعة", "طبيعة", "AlUla desert rocks"),
+    ("الدرعية", "حي الطريف", "تراث", "At-Turaif Diriyah"),
+    ("الرياض", "قصر المصمك", "تراث", "Masmak fortress Riyadh"),
+    ("الرياض", "برج المملكة", "رؤية ٢٠٣٠", "Kingdom Centre Riyadh skyline"),
+    ("الرياض", "المركز المالي", "رؤية ٢٠٣٠", "King Abdullah Financial District Riyadh"),
+    ("جبال طويق", "حافة العالم", "طبيعة", "Edge of the World Riyadh"),
+    ("جدة التاريخية", "البلد", "تراث", "Al-Balad Jeddah historic houses"),
+    ("جدة", "الكورنيش", "رؤية ٢٠٣٠", "Jeddah corniche"),
+    ("البحر الأحمر", "الساحل", "رؤية ٢٠٣٠", "Red Sea coast Saudi Arabia"),
+    ("عسير", "أبها", "طبيعة", "Abha Asir mountains"),
+    ("الأحساء", "جبل القارة", "طبيعة", "Al-Qarah mountain Al-Ahsa"),
+]
+_BAD_WORDS = ("map", "logo", "flag", "diagram", "plan", "coin", "stamp", "chart", "svg", "drawing")
+
+
+def _strip_html(t):
+    import re
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", t or "")).strip()
+
+
+def fetch_stock_photos(log, limit=16, per_query=2):
+    """يحمّل صور مناظر سعودية من ويكيميديا كومنز (ترخيص حر) بمقاس الشاشة."""
+    import urllib.parse
+    import urllib.request
+    headers = {"User-Agent": "TVManager/1.2 (https://github.com/ps4farisup-arch/TVManager)"}
+    got = 0
+    for place, sub, tag, q in STOCK_QUERIES:
+        if got >= limit:
+            break
+        params = {
+            "action": "query", "format": "json", "generator": "search", "gsrnamespace": "6",
+            "gsrsearch": "filetype:bitmap " + q, "gsrlimit": "12", "prop": "imageinfo",
+            "iiprop": "url|size|mime|extmetadata", "iiurlwidth": "1920",
+        }
+        url = "https://commons.wikimedia.org/w/api.php?" + urllib.parse.urlencode(params)
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=25) as r:
+                pages = json.loads(r.read().decode("utf-8")).get("query", {}).get("pages", {})
+        except Exception as e:
+            log.append("تعذّر البحث عن صور «%s»: %s" % (place, e))
+            continue
+        ranked = sorted(pages.values(), key=lambda p: p.get("index", 99))
+        taken = 0
+        for pg in ranked:
+            if taken >= per_query or got >= limit:
+                break
+            title = pg.get("title", "").lower()
+            ii = (pg.get("imageinfo") or [{}])[0]
+            w, h = ii.get("width", 0), ii.get("height", 1)
+            if ii.get("mime") != "image/jpeg" or w < 1600 or not 1.25 <= w / float(h) <= 2.4:
+                continue
+            if any(b in title for b in _BAD_WORDS):
+                continue
+            meta = ii.get("extmetadata", {})
+            lic = _strip_html(meta.get("LicenseShortName", {}).get("value", ""))
+            if not lic or not any(x in lic.lower() for x in ("cc", "public domain", "pd")):
+                continue
+            artist = _strip_html(meta.get("Artist", {}).get("value", ""))[:60] or "Wikimedia Commons"
+            thumb = ii.get("thumburl") or ii.get("url")
+            try:
+                with urllib.request.urlopen(urllib.request.Request(thumb, headers=headers), timeout=40) as r:
+                    data = r.read()
+            except Exception:
+                continue
+            if data[:3] != b"\xff\xd8\xff" or len(data) > 3 * 1024 * 1024:
+                continue
+            save_photo(data, {"name": place + " · " + sub, "tag": tag,
+                              "credit": "تصوير: %s · %s · ويكيميديا كومنز" % (artist, lic)})
+            taken += 1
+            got += 1
+    log.append("تم تحميل %d صورة من ويكيميديا كومنز." % got if got else "ما قدرت أحمّل صور جاهزة، تأكد من اتصال الكمبيوتر بالإنترنت.")
+    return got
+
+
 def _loc(country=0, city=0):
     country, city = int(country), int(city)
     if not 0 <= country < len(COUNTRIES):
@@ -580,7 +723,8 @@ def page(country=0, city=0, photo_base="photos/", photo_suffix="", log=None, kee
         "scenes": tv_scenes.build(),
         "stars": ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">'
                   + tv_scenes.stars() + '</svg>'),
-        "photos": [photo_base + n + photo_suffix for n in photo_names()],
+        "photos": [[photo_base + n + photo_suffix, photo_meta(n).get("name", ""), photo_meta(n).get("tag", ""),
+                    photo_meta(n).get("credit", "")] for n in photo_names()],
         "mix": False,
         "keep": keep_src,
     }

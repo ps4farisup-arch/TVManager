@@ -810,6 +810,9 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 ip = req.get("ip", "")
                 ipaddress.ip_address(ip)
                 country, city = int(req.get("country", 0)), int(req.get("city", 0))
+                stock_log = []
+                if not screen.photo_names():
+                    screen.fetch_stock_photos(stock_log)
                 if req.get("brand") == "lg":
                     font_log = []
                     pkg = screen.lg_ipk(country, city, font_log)
@@ -819,6 +822,7 @@ class Panel(http.server.BaseHTTPRequestHandler):
                     ok, log = samsung_screen_install(ip, country, city, req.get("profile", "").strip())
                 else:
                     raise ValueError("نوع شاشة غير معروف.")
+                log[0:0] = stock_log
                 return self._json({"ok": ok, "log": log})
             if path == "/api/screen/package":
                 req = json.loads(self._body() or b"{}")
@@ -841,15 +845,15 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 names = screen.photo_names()
                 if len(names) >= 20:
                     raise ValueError("الحد الأقصى ٢٠ صورة.")
-                os.makedirs(screen.PHOTO_DIR, exist_ok=True)
-                nums = [int(n.split(".")[0]) for n in names if n.split(".")[0].isdigit()]
-                with open(os.path.join(screen.PHOTO_DIR, "%d.jpg" % (max(nums + [0]) + 1)), "wb") as f:
-                    f.write(data)
+                screen.save_photo(data)
                 return self._json({"ok": True, "count": len(screen.photo_names())})
             if path == "/api/photos/clear":
-                for n in screen.photo_names():
-                    os.remove(os.path.join(screen.PHOTO_DIR, n))
+                screen.clear_photos()
                 return self._json({"ok": True, "count": 0})
+            if path == "/api/photos/stock":
+                log = []
+                screen.fetch_stock_photos(log)
+                return self._json({"ok": True, "count": len(screen.photo_names()), "log": log})
             if path == "/api/dns/start":
                 ok = DNS.start()
                 return self._json({"ok": ok, **DNS.status()})
@@ -997,10 +1001,11 @@ pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-ra
     </details>
     <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--line)">
       <h2 style="font-size:1.05rem">صورك كخلفية (اختياري)</h2>
-      <p class="muted" style="font-size:.92rem">أضف صورك أو صور تحمّلها من مواقع مجانية مثل Unsplash و Pexels. إذا أضفت صور، تظهر بدل المناظر المرسومة. البرنامج يصغّرها لمقاس الشاشة تلقائياً. بعد الإضافة اضغط «ثبّت شاشتي» مرة ثانية عشان توصل للشاشة.</p>
+      <p class="muted" style="font-size:.92rem">«حمّل صور سعودية جاهزة» يجيب صور حقيقية للعلا والدرعية والرياض وجدة وحافة العالم وغيرها من ويكيميديا كومنز (مرخّصة للاستخدام، واسم المصوّر يظهر أسفل الشاشة). وتقدر تضيف صورك الخاصة كمان. الصور تظهر بدل المناظر المرسومة. البرنامج يصغّرها لمقاس الشاشة تلقائياً. بعد الإضافة اضغط «ثبّت شاشتي» مرة ثانية عشان توصل للشاشة.</p>
       <div class="row">
         <input type="file" id="photoFiles" accept="image/*" multiple aria-label="الصور">
         <button class="primary" id="photoBtn" onclick="addPhotos()">أضف الصور</button>
+        <button id="stockBtn" onclick="stockPhotos()">حمّل صور سعودية جاهزة</button>
         <button onclick="clearPhotos()">احذف كل الصور</button>
         <span class="muted" id="photoNote"></span>
       </div>
@@ -1250,6 +1255,14 @@ async function addPhotos() {
   }
   $('photoBtn').disabled = false; $('photoFiles').value = '';
   await photoCount();
+}
+async function stockPhotos() {
+  $('stockBtn').disabled = true;
+  $('photoNote').textContent = 'أحمّل الصور… قد يأخذ دقيقة.';
+  const j = await api('/api/photos/stock', {method: 'POST'});
+  $('stockBtn').disabled = false;
+  await photoCount();
+  if (j.log) $('photoNote').textContent += ' ' + j.log[j.log.length - 1];
 }
 async function clearPhotos() { await api('/api/photos/clear', {method: 'POST'}); await photoCount(); }
 
