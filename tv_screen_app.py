@@ -116,6 +116,12 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;col
 #sky{-webkit-transition:background 6s;transition:background 6s}
 .layer{opacity:0;-webkit-transition:opacity 2.5s;transition:opacity 2.5s;background-size:cover;background-position:center}
 .layer.on{opacity:1}
+.layer.ph{-webkit-filter:brightness(.74) contrast(1.08) saturate(.9) sepia(.14);filter:brightness(.74) contrast(1.08) saturate(.9) sepia(.14);
+  -webkit-animation:kb 300s ease-in-out infinite alternate;animation:kb 300s ease-in-out infinite alternate}
+@-webkit-keyframes kb{from{-webkit-transform:scale(1)}to{-webkit-transform:scale(1.07)}}
+@keyframes kb{from{transform:scale(1)}to{transform:scale(1.07)}}
+#vig{position:fixed;top:0;left:0;right:0;bottom:0;opacity:0;-webkit-transition:opacity 2.5s;transition:opacity 2.5s;
+  background:radial-gradient(ellipse at 55% 45%,rgba(0,0,0,0) 35%,rgba(0,0,0,.6) 100%),linear-gradient(rgba(70,40,15,.14),rgba(70,40,15,.14))}
 .layer svg,#stars svg{width:100%;height:100%;display:block}
 #stars{-webkit-transition:opacity 4s;transition:opacity 4s}
 .f1,.f2,.f3,.sea,.lt,.st,.rf,.mr,.gl{-webkit-transition:fill 6s,opacity 6s;transition:fill 6s,opacity 6s}
@@ -161,12 +167,15 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;col
 .t b{display:block;font-size:1.65vw;font-weight:500;margin-top:.15vw}
 .t.on{opacity:1}
 .t.on span,.t.on b{color:#d9b46a}
-.place{position:absolute;left:0;top:1.5vw;text-align:left}
-.place .lbl{font-size:1.15vw;color:#d9b46a;direction:rtl}
-.place .nm{font-size:1.75vw;font-weight:600;line-height:1.4;direction:rtl}
-.place .nav{font-size:1.05vw;direction:rtl}
+.matches{position:absolute;left:0;top:1.5vw;max-width:30vw;text-align:left;direction:rtl}
+.matches .lbl{font-size:1.15vw;color:#d9b46a;text-align:left}
+.matches .nm{font-size:1.75vw;font-weight:600;line-height:1.4;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.matches .nm.none{font-size:1.3vw;font-weight:400;color:rgba(244,239,230,.68)}
+.matches .sub{font-size:1.05vw;text-align:left}
+.matches .live{color:#e8735a;font-weight:600}
+#verse.hadith{font-size:1.9vw}
 
-#credit{position:fixed;bottom:.9vh;left:4vw;font-size:.8vw;opacity:.55;direction:rtl;text-align:left;max-width:60vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#credit{position:fixed;bottom:.9vh;left:4vw;font-size:.8vw;opacity:.6;direction:rtl;text-align:left;max-width:70vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #hint{position:fixed;top:1.4vh;left:0;right:0;text-align:center;font-size:1vw;opacity:.7;-webkit-transition:opacity 2s;transition:opacity 2s}
 #picker{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(5,6,10,.9)}
 #picker h2{font-size:2.2vw;font-weight:600;text-align:center;margin:6vh 0 2.5vh;color:#d9b46a}
@@ -179,18 +188,18 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;col
 <style id="pal"></style>
 <div id="sky"></div><div id="stars"></div>
 <div class="layer" id="lA"></div><div class="layer" id="lB"></div>
-<div id="scrim"></div>
+<div id="vig"></div><div id="scrim"></div>
 <div id="ui">
   <div class="top">
     <div class="date"><div class="h" id="hijri">&nbsp;</div><div class="g muted" id="greg"></div></div>
     <div class="wx"><div class="now" id="wxNow">&nbsp;</div><div class="sub muted" id="wxSub"></div><div class="days" id="wxDays"></div></div>
   </div>
   <div class="clockbox"><div dir="ltr" style="text-align:right"><span id="ampm"></span><span id="clock"></span></div><div id="tz" class="muted"></div></div>
-  <div class="card" id="card" style="display:none"><div class="lbl">آية اليوم</div><div id="verse"></div><div id="verseSrc"></div></div>
+  <div class="card" id="card" style="display:none"><div class="lbl" id="cardLbl">من القرآن الكريم</div><div id="verse"></div><div id="verseSrc"></div></div>
   <div class="bottom">
     <div class="next"><div class="lbl">الصلاة القادمة</div><div class="nm" id="nextName">&nbsp;</div><div class="left muted" id="nextLeft"></div></div>
     <div class="times" id="times"></div>
-    <div class="place"><div class="lbl" id="placeTag"></div><div class="nm" id="placeName"></div><div class="nav muted">◀ ▶ لتغيير الخلفية</div></div>
+    <div class="matches"><div class="lbl" id="mLbl">مباريات اليوم</div><div class="nm none" id="mBody">…</div><div class="sub muted" id="mSub"></div></div>
   </div>
 </div>
 <div id="credit"></div>
@@ -354,23 +363,114 @@ function loadWeather(){
       function(j){ if (j && j.daily){ sset('w', {loc: lk, data: j}); renderWx(j); } });
 }
 
-function loadVerse(){
-  var day = Math.floor(Date.now() / 86400000), cached = sget('v2');
-  if (cached && cached.day === day){ showVerse(cached); return; }
-  var n = ((day * 7919) % 6236) + 1, tries = 0;
+/* بطاقة الآية والحديث: تتبدّل كل 5 دقائق (آية ثم حديث) */
+var cardSlot = -1, F = CFG.f || {verses: true, hadith: true, matches: true, weather: true};
+function cardTick(){
+  var slot = Math.floor(Date.now() / (5 * 60000));
+  if (slot === cardSlot) return;
+  cardSlot = slot;
+  var H = (F.hadith && CFG.hadith) || [];
+  if (!F.verses && !H.length){ $('card').style.display = 'none'; return; }
+  if (H.length && (!F.verses || slot % 2 === 1)){
+    var h = H[((F.verses ? slot >> 1 : slot) * 7) % H.length];
+    showCard('حديث نبوي · صحيح البخاري', 'قال رسول الله ﷺ: «' + h[0] + '»', 'رواه البخاري · رقم ' + ar(h[1]), true);
+  } else {
+    loadVerse(slot);
+  }
+}
+function loadVerse(slot){
+  var cached = sget('v2'), n = ((slot * 7919) % 6236) + 1, tries = 0;
   function attempt(){
     get('https://api.alquran.cloud/v1/ayah/' + n + '/quran-simple', function(j){
       if (j && j.data && j.data.text){
         if (j.data.text.length > 115 && tries < 12){ tries++; n = n % 6236 + 1; attempt(); return; }
-        var v = {day: day, text: j.data.text,
+        var v = {text: j.data.text,
                  src: String(j.data.surah.name).replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/g, '') + ' · الآية ' + ar(j.data.numberInSurah)};
-        sset('v2', v); showVerse(v);
-      } else if (cached){ showVerse(cached); }
+        sset('v2', v); showCard('من القرآن الكريم', '﴿' + v.text + '﴾', v.src, false);
+      } else if (cached){ showCard('من القرآن الكريم', '﴿' + cached.text + '﴾', cached.src, false); }
     });
   }
   attempt();
 }
-function showVerse(v){ $('verse').innerHTML = '﴿' + v.text + '﴾'; $('verseSrc').innerHTML = v.src; $('card').style.display = 'block'; }
+function showCard(label, text, src, isHadith){
+  $('cardLbl').innerHTML = label; $('verse').innerHTML = text; $('verseSrc').innerHTML = src;
+  $('verse').className = isHadith ? 'hadith' : '';
+  $('card').style.display = 'block';
+}
+
+/* المباريات: دوري روشن ودوري أبطال أوروبا */
+var LEAGUES = [['Saudi-Arabian Pro League', 'دوري روشن', 0], ['UEFA Champions League', 'أبطال أوروبا', 1]];
+var TEAMS_AR = [
+  ['hilal','الهلال'],['nassr','النصر'],['ittihad','الاتحاد'],['ahli','الأهلي'],['shabab','الشباب'],['ettifaq','الاتفاق'],
+  ['taawoun','التعاون'],['taawon','التعاون'],['fateh','الفتح'],['fayha','الفيحاء'],['khaleej','الخليج'],['qadsiah','القادسية'],
+  ['qadisiyah','القادسية'],['okhdood','الأخدود'],['akhdoud','الأخدود'],['kholood','الخلود'],['orobah','العروبة'],['damac','ضمك'],
+  ['wehda','الوحدة'],['raed','الرائد'],['najma','النجمة'],['neom','نيوم'],['hazem','الحزم'],['hazm','الحزم'],['abha','أبها'],
+  ['riyadh','الرياض'],['real madrid','ريال مدريد'],['barcelona','برشلونة'],['bayern','بايرن ميونخ'],['manchester city','مانشستر سيتي'],
+  ['man city','مانشستر سيتي'],['manchester united','مانشستر يونايتد'],['liverpool','ليفربول'],['arsenal','آرسنال'],['chelsea','تشيلسي'],
+  ['paris','باريس سان جيرمان'],['psg','باريس سان جيرمان'],['inter','إنتر ميلان'],['milan','ميلان'],['juventus','يوفنتوس'],
+  ['dortmund','دورتموند'],['atletico','أتلتيكو مدريد'],['atlético','أتلتيكو مدريد'],['napoli','نابولي'],['benfica','بنفيكا'],
+  ['porto','بورتو'],['tottenham','توتنهام'],['leverkusen','ليفركوزن'],['newcastle','نيوكاسل'],['aston villa','أستون فيلا'],
+  ['atalanta','أتالانتا'],['sporting','سبورتنغ لشبونة'],['ajax','أياكس'],['psv','آيندهوفن'],['celtic','سلتيك'],['monaco','موناكو'],
+  ['marseille','مارسيليا'],['galatasaray','غلطة سراي'],['brugge','كلوب بروج'],['leipzig','لايبزيغ'],['frankfurt','فرانكفورت'],
+  ['feyenoord','فينورد'],['bologna','بولونيا'],['girona','جيرونا'],['villarreal','فياريال'],['athletic','أتلتيك بيلباو'],
+  ['roma','روما'],['lille','ليل'],['stuttgart','شتوتغارت'],['olympiacos','أولمبياكوس'],['copenhagen','كوبنهاغن']
+];
+function teamAr(n){
+  var low = String(n || '').toLowerCase().replace(/[-_.]/g, ' ');
+  for (var i = 0; i < TEAMS_AR.length; i++) if (low.indexOf(TEAMS_AR[i][0]) >= 0) return TEAMS_AR[i][1];
+  return n || '';
+}
+function utcDay(d){ return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); }
+var MATCHES = [], mPage = 0, mLive = false;
+function loadMatches(){
+  var now = new Date(), start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  var end = new Date(start.getTime() + 86399000), days = [utcDay(start)];
+  if (utcDay(end) !== days[0]) days.push(utcDay(end));
+  var pending = 0, found = {}, list = [];
+  function one(lg, day){
+    pending++;
+    get('https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d=' + day + '&l=' + encodeURIComponent(lg[0]), function(j){
+      var ev = (j && j.events) || [];
+      for (var i = 0; i < ev.length; i++){
+        var e = ev[i], ts = e.strTimestamp || (e.dateEvent + 'T' + (e.strTime || '00:00:00'));
+        var t = new Date(String(ts).substr(0, 19) + 'Z');
+        if (isNaN(t.getTime()) || t < start || t > end || found[e.idEvent]) continue;
+        found[e.idEvent] = 1;
+        list.push({h: teamAr(e.strHomeTeam), a: teamAr(e.strAwayTeam), hs: e.intHomeScore, as: e.intAwayScore,
+                   t: t, st: String(e.strStatus || ''), pr: e.strProgress, comp: lg[1], pri: lg[2]});
+      }
+      if (--pending === 0){
+        list.sort(function(x, y){ return x.pri - y.pri || x.t - y.t; });
+        MATCHES = list.slice(0, 10); mPage = 0; renderMatch();
+      }
+    });
+  }
+  for (var a = 0; a < LEAGUES.length; a++) for (var b = 0; b < days.length; b++) one(LEAGUES[a], days[b]);
+}
+function matchState(m){
+  var s = m.st.toUpperCase();
+  if (/^(FT|AET|PEN|MATCH FINISHED)/.test(s)) return ['done', 'النتيجة النهائية'];
+  if (/POSTP|CANC|ABD/.test(s)) return ['off', 'مؤجلة'];
+  if (s === 'HT') return ['live', 'مباشر · استراحة'];
+  if (/^(1H|2H|ET|P|LIVE|BT)$/.test(s) || (m.pr && /^\d+$/.test(String(m.pr)))) return ['live', 'مباشر' + (m.pr ? ' · ' + ar(m.pr) + "'" : '')];
+  var hh = m.t.getHours(), h12 = hh % 12 || 12;
+  return ['soon', 'تبدأ ' + ar(h12 + ':' + pad(m.t.getMinutes())) + (hh < 12 ? ' ص' : ' م')];
+}
+function renderMatch(){
+  mLive = false;
+  for (var i = 0; i < MATCHES.length; i++) if (matchState(MATCHES[i])[0] === 'live') mLive = true;
+  if (!MATCHES.length){
+    $('mLbl').innerHTML = 'مباريات اليوم'; $('mBody').className = 'nm none';
+    $('mBody').innerHTML = 'ما فيه مباريات اليوم'; $('mSub').innerHTML = 'دوري روشن · أبطال أوروبا';
+    return;
+  }
+  var m = MATCHES[mPage % MATCHES.length], st = matchState(m);
+  var score = (st[0] === 'soon' || m.hs === null || m.hs === undefined || m.hs === '') ? ' × ' : ' ' + ar(m.hs) + ' - ' + ar(m.as) + ' ';
+  $('mLbl').innerHTML = 'مباريات اليوم' + (MATCHES.length > 1 ? ' · ' + ar(mPage % MATCHES.length + 1) + '/' + ar(MATCHES.length) : '');
+  $('mBody').className = 'nm';
+  $('mBody').innerHTML = m.h + score + m.a;
+  $('mSub').innerHTML = (st[0] === 'live' ? '<span class="live">' + st[1] + '</span>' : st[1]) + ' · ' + m.comp;
+}
 
 function buildBg(){
   var i;
@@ -395,11 +495,11 @@ function setBg(i){
   var b = BG[bgIdx], show = layerA ? $('lA') : $('lB'), hide = layerA ? $('lB') : $('lA');
   if (b.photo){ show.innerHTML = ''; show.style.backgroundImage = 'url("' + b.photo + '")'; }
   else { show.style.backgroundImage = 'none'; show.innerHTML = b.scene; }
-  show.className = 'layer on'; hide.className = 'layer';
+  show.className = b.photo ? 'layer on ph' : 'layer on';
+  hide.className = hide.className.indexOf('ph') >= 0 ? 'layer ph' : 'layer';
+  $('vig').style.opacity = b.photo ? '1' : '0';
   layerA = !layerA;
-  $('placeTag').innerHTML = b.tag;
-  $('placeName').innerHTML = b.name;
-  $('credit').innerHTML = b.credit || '';
+  $('credit').innerHTML = '◀ ▶ ' + b.name + ' (' + b.tag + ')' + (b.credit ? ' — ' + b.credit : '');
 }
 
 /* منع توفير الطاقة وشاشة التوقف طالما التطبيق مفتوح */
@@ -462,7 +562,7 @@ function choose(){
   loc = [pickCountry, sel]; sset('loc', loc); closePicker();
   P = null; $('times').innerHTML = ''; $('nextName').innerHTML = '&nbsp;'; $('nextLeft').innerHTML = '';
   $('wxNow').innerHTML = '&nbsp;'; $('wxSub').innerHTML = ''; $('wxDays').innerHTML = '';
-  loadPrayers(); loadWeather(); tick();
+  loadPrayers(); if (F.weather) loadWeather(); tick();
 }
 function exitApp(){
   try { if (window.tizen){ tizen.application.getCurrentApplication().exit(); return; } } catch(e){}
@@ -486,12 +586,17 @@ document.addEventListener('keydown', function(e){
 });
 
 $('stars').innerHTML = CFG.stars;
+if (!F.weather) document.querySelector('.wx').style.display = 'none';
+if (!F.matches){ document.querySelector('.matches').style.display = 'none'; loadMatches = function(){}; }
 buildBg(); setBg(bgIdx);
-tick(); loadPrayers(); loadWeather(); loadVerse(); drift(); keepAwake();
+tick(); loadPrayers(); if (F.weather) loadWeather(); cardTick(); loadMatches(); drift(); keepAwake();
+setInterval(cardTick, 15000);
+setInterval(function(){ if (MATCHES.length > 1){ mPage++; renderMatch(); } }, 8000);
+var mCount = 0;
+setInterval(function(){ mCount++; if (mLive || mCount % 5 === 0) loadMatches(); }, 2 * 60000);
 setInterval(keepAwake, 5 * 60000);
 setInterval(tick, 10000);
-setInterval(loadWeather, 30 * 60000);
-setInterval(loadVerse, 60 * 60000);
+setInterval(function(){ if (F.weather) loadWeather(); }, 30 * 60000);
 setInterval(drift, 120000);
 setTimeout(function(){ $('hint').style.opacity = '0'; }, 12000);
 </script>
@@ -630,20 +735,33 @@ def clear_photos():
 
 # صور مرخّصة ترخيصاً حراً من ويكيميديا كومنز، مع ذكر المصوّر والترخيص على الشاشة
 STOCK_QUERIES = [
+    ("مكة المكرمة", "المسجد الحرام", "مكة المكرمة", "Masjid al-Haram Kaaba"),
+    ("مكة المكرمة", "أبراج البيت", "مكة المكرمة", "Abraj Al Bait clock tower Mecca"),
+    ("المدينة المنورة", "المسجد النبوي", "المدينة المنورة", "Al-Masjid an-Nabawi Medina"),
     ("العلا", "الحِجر", "تراث", "Hegra Mada'in Salih tomb"),
-    ("العلا", "جبل الفيل", "طبيعة", "Elephant Rock AlUla"),
+    ("العلا", "جبل الفيل", "تراث", "Elephant Rock AlUla"),
     ("العلا", "مرايا", "رؤية ٢٠٣٠", "Maraya AlUla"),
-    ("العلا", "الطبيعة", "طبيعة", "AlUla desert rocks"),
     ("الدرعية", "حي الطريف", "تراث", "At-Turaif Diriyah"),
     ("الرياض", "قصر المصمك", "تراث", "Masmak fortress Riyadh"),
-    ("الرياض", "برج المملكة", "رؤية ٢٠٣٠", "Kingdom Centre Riyadh skyline"),
-    ("الرياض", "المركز المالي", "رؤية ٢٠٣٠", "King Abdullah Financial District Riyadh"),
-    ("جبال طويق", "حافة العالم", "طبيعة", "Edge of the World Riyadh"),
     ("جدة التاريخية", "البلد", "تراث", "Al-Balad Jeddah historic houses"),
+    ("الرياض", "برج المملكة", "رؤية ٢٠٣٠", "Kingdom Centre Riyadh skyline"),
+    ("الرياض", "مركز الملك عبدالله المالي", "رؤية ٢٠٣٠", "King Abdullah Financial District Riyadh"),
+    ("الظهران", "إثراء", "رؤية ٢٠٣٠", "King Abdulaziz Center for World Culture Ithra"),
+    ("الرياض", "مترو الرياض", "رؤية ٢٠٣٠", "Riyadh Metro station"),
     ("جدة", "الكورنيش", "رؤية ٢٠٣٠", "Jeddah corniche"),
-    ("البحر الأحمر", "الساحل", "رؤية ٢٠٣٠", "Red Sea coast Saudi Arabia"),
+    ("الدرعية", "بوابة الدرعية", "رؤية ٢٠٣٠", "Diriyah Gate project"),
+    ("القدية", "عاصمة الترفيه", "رؤية ٢٠٣٠", "Qiddiya"),
+    ("نيوم", "خليج العقبة", "رؤية ٢٠٣٠", "NEOM Saudi Arabia"),
+    ("نيوم", "خليج العقبة", "رؤية ٢٠٣٠", "NEOM Saudi Arabia"),
+    ("القدية", "الرياض", "رؤية ٢٠٣٠", "Qiddiya Riyadh"),
+    ("البحر الأحمر", "الشعاب والجزر", "رؤية ٢٠٣٠", "Red Sea coral reef Saudi Arabia island"),
+    ("الدرعية", "البجيري", "رؤية ٢٠٣٠", "Al Bujairi Diriyah"),
+    ("أشيقر", "البلدة التراثية", "تراث", "Ushaiqer heritage village"),
+    ("رجال ألمع", "القرية التراثية", "تراث", "Rijal Almaa village"),
+    ("الأحساء", "الواحة", "تراث", "Al-Ahsa oasis palm"),
+    ("جبة", "النقوش الصخرية", "تراث", "Jubbah rock art Hail"),
+    ("جبال طويق", "حافة العالم", "طبيعة", "Edge of the World Riyadh"),
     ("عسير", "أبها", "طبيعة", "Abha Asir mountains"),
-    ("الأحساء", "جبل القارة", "طبيعة", "Al-Qarah mountain Al-Ahsa"),
 ]
 _BAD_WORDS = ("map", "logo", "flag", "diagram", "plan", "coin", "stamp", "chart", "svg", "drawing")
 
@@ -653,11 +771,29 @@ def _strip_html(t):
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", t or "")).strip()
 
 
-def fetch_stock_photos(log, limit=16, per_query=2):
+import threading
+_STOCK_LOCK = threading.Lock()
+
+
+def fetch_stock_photos(log, limit=32, per_query=2, only_if_empty=False):
     """يحمّل صور مناظر سعودية من ويكيميديا كومنز (ترخيص حر) بمقاس الشاشة."""
+    with _STOCK_LOCK:
+        if only_if_empty and photo_names():
+            return 0
+        return _fetch_stock(log, limit, per_query)
+
+
+def _fetch_stock(log, limit, per_query):
     import urllib.parse
     import urllib.request
     headers = {"User-Agent": "TVManager/1.2 (https://github.com/ps4farisup-arch/TVManager)"}
+    for n in photo_names():                     # نستبدل الصور الجاهزة القديمة فقط، وصورك تبقى
+        if photo_meta(n).get("stock"):
+            for ext in (".jpg", ".json"):
+                try:
+                    os.remove(os.path.join(PHOTO_DIR, n[:-4] + ext))
+                except OSError:
+                    pass
     got = 0
     for place, sub, tag, q in STOCK_QUERIES:
         if got >= limit:
@@ -682,7 +818,7 @@ def fetch_stock_photos(log, limit=16, per_query=2):
             title = pg.get("title", "").lower()
             ii = (pg.get("imageinfo") or [{}])[0]
             w, h = ii.get("width", 0), ii.get("height", 1)
-            if ii.get("mime") != "image/jpeg" or w < 1600 or not 1.25 <= w / float(h) <= 2.4:
+            if ii.get("mime") != "image/jpeg" or w < 1400 or not 1.2 <= w / float(h) <= 2.6:
                 continue
             if any(b in title for b in _BAD_WORDS):
                 continue
@@ -699,12 +835,105 @@ def fetch_stock_photos(log, limit=16, per_query=2):
                 continue
             if data[:3] != b"\xff\xd8\xff" or len(data) > 3 * 1024 * 1024:
                 continue
-            save_photo(data, {"name": place + " · " + sub, "tag": tag,
+            save_photo(data, {"name": place + " · " + sub, "tag": tag, "stock": True,
                               "credit": "تصوير: %s · %s · ويكيميديا كومنز" % (artist, lic)})
             taken += 1
             got += 1
     log.append("تم تحميل %d صورة من ويكيميديا كومنز." % got if got else "ما قدرت أحمّل صور جاهزة، تأكد من اتصال الكمبيوتر بالإنترنت.")
     return got
+
+
+# أحاديث من صحيح البخاري: نص كل حديث يُطابَق مع نسخة البخاري الكاملة قبل عرضه، وما لا يطابق لا يُعرض
+HADITH_CANDIDATES = [
+    "إنما الأعمال بالنيات",
+    "يسروا ولا تعسروا وبشروا ولا تنفروا",
+    "لا يؤمن أحدكم حتى يحب لأخيه ما يحب لنفسه",
+    "المسلم من سلم المسلمون من لسانه ويده",
+    "من كان يؤمن بالله واليوم الآخر فليقل خيرا أو ليصمت",
+    "خيركم من تعلم القرآن وعلمه",
+    "ليس الشديد بالصرعة إنما الشديد الذي يملك نفسه عند الغضب",
+    "إن الدين يسر",
+    "كلمتان حبيبتان إلى الرحمن خفيفتان على اللسان ثقيلتان في الميزان سبحان الله وبحمده سبحان الله العظيم",
+    "من لا يرحم لا يرحم",
+    "كن في الدنيا كأنك غريب أو عابر سبيل",
+    "اتقوا النار ولو بشق تمرة",
+    "أحب الأعمال إلى الله أدومها وإن قل",
+    "الكلمة الطيبة صدقة",
+    "نعمتان مغبون فيهما كثير من الناس الصحة والفراغ",
+    "اليد العليا خير من اليد السفلى",
+    "من يرد الله به خيرا يفقهه في الدين",
+    "الحياء من الإيمان",
+    "بلغوا عني ولو آية",
+    "المؤمن للمؤمن كالبنيان يشد بعضه بعضا",
+    "ما أنزل الله داء إلا أنزل له شفاء",
+    "إذا لم تستح فاصنع ما شئت",
+    "ليس الغنى عن كثرة العرض ولكن الغنى غنى النفس",
+    "من صام رمضان إيمانا واحتسابا غفر له ما تقدم من ذنبه",
+    "كل معروف صدقة",
+    "الظلم ظلمات يوم القيامة",
+    "لا يلدغ المؤمن من جحر واحد مرتين",
+    "حق المسلم على المسلم خمس رد السلام وعيادة المريض واتباع الجنائز وإجابة الدعوة وتشميت العاطس",
+]
+HADITH_CACHE = os.path.join(os.path.expanduser("~"), ".tv_manager_hadith.json")
+BUKHARI_URLS = [
+    "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/ara-bukhari.min.json",
+    "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/ara-bukhari.json",
+    "https://raw.githubusercontent.com/fawazahmed0/hadith-api/1/editions/ara-bukhari.min.json",
+]
+
+
+def norm_ar(t):
+    import re
+    t = re.sub(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u0640]", "", t or "")
+    t = re.sub(r"[إأآٱ]", "ا", t).replace("ى", "ي").replace("ة", "ه").replace("ؤ", "و").replace("ئ", "ي")
+    t = re.sub(r"[^\u0621-\u064A ]+", " ", t)
+    return " " + re.sub(r"\s+", " ", t).strip() + " "
+
+
+_HADITH_LOCK = threading.Lock()
+
+
+def bukhari_hadiths(log=None):
+    """يرجّع [[نص الحديث، رقمه في البخاري], ...] بعد التحقق من كل نص."""
+    with _HADITH_LOCK:
+        try:
+            with open(HADITH_CACHE, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+            if cache.get("candidates") == len(HADITH_CANDIDATES) and cache.get("items"):
+                return cache["items"]
+        except Exception:
+            pass
+        import urllib.request
+        data = None
+        for u in BUKHARI_URLS:
+            try:
+                req = urllib.request.Request(u, headers={"User-Agent": "TVManager/1.3"})
+                with urllib.request.urlopen(req, timeout=90) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                if data.get("hadiths"):
+                    break
+            except Exception:
+                data = None
+        if not data or not data.get("hadiths"):
+            if log is not None:
+                log.append("ما قدرت أحمّل صحيح البخاري للتحقق من الأحاديث، بتظهر الآيات فقط.")
+            return []
+        corpus = [(h.get("hadithnumber"), norm_ar(h.get("text", ""))) for h in data["hadiths"]]
+        items = []
+        for cand in HADITH_CANDIDATES:
+            nc = norm_ar(cand)[1:]          # يسمح بحرف قبل الكلمة الأولى مثل «و»
+            for num, txt in corpus:
+                if nc in txt:
+                    items.append([cand, int(num) if str(num).isdigit() else num])
+                    break
+        try:
+            with open(HADITH_CACHE, "w", encoding="utf-8") as f:
+                json.dump({"candidates": len(HADITH_CANDIDATES), "items": items}, f, ensure_ascii=False)
+        except OSError:
+            pass
+        if log is not None:
+            log.append("تم التحقق من %d حديث من صحيح البخاري." % len(items))
+        return items
 
 
 def _loc(country=0, city=0):
@@ -716,8 +945,18 @@ def _loc(country=0, city=0):
     return [country, city]
 
 
-def page(country=0, city=0, photo_base="photos/", photo_suffix="", log=None, keep_src="keep.mp4"):
+FEATURES = ("verses", "hadith", "matches", "weather")
+
+
+def _features(f):
+    f = f or {}
+    return {k: bool(f.get(k, True)) for k in FEATURES}
+
+
+def page(country=0, city=0, photo_base="photos/", photo_suffix="", log=None, keep_src="keep.mp4", features=None):
+    feats = _features(features)
     cfg = {
+        "f": feats,
         "loc": _loc(country, city),
         "countries": COUNTRIES,
         "scenes": tv_scenes.build(),
@@ -726,6 +965,7 @@ def page(country=0, city=0, photo_base="photos/", photo_suffix="", log=None, kee
         "photos": [[photo_base + n + photo_suffix, photo_meta(n).get("name", ""), photo_meta(n).get("tag", ""),
                     photo_meta(n).get("credit", "")] for n in photo_names()],
         "mix": False,
+        "hadith": bukhari_hadiths(log) if feats["hadith"] else [],
         "keep": keep_src,
     }
     data = json.dumps(cfg, ensure_ascii=False).replace("</", "<\\/")
@@ -793,7 +1033,7 @@ def _ar(members):
     return bytes(out)
 
 
-def lg_ipk(country=0, city=0, log=None):
+def lg_ipk(country=0, city=0, log=None, features=None):
     appinfo = {
         "id": LG_APP_ID, "version": APP_VERSION, "vendor": "Shashati", "type": "web",
         "main": "index.html", "title": "شاشتي", "icon": "icon.png", "largeIcon": "largeIcon.png",
@@ -803,7 +1043,7 @@ def lg_ipk(country=0, city=0, log=None):
                "package_format_version": 2, "vendor": "Shashati", "version": APP_VERSION}
     files = {
         "appinfo.json": json.dumps(appinfo, ensure_ascii=False, indent=1).encode("utf-8"),
-        "index.html": page(country, city, log=log).encode("utf-8"),
+        "index.html": page(country, city, log=log, features=features).encode("utf-8"),
         "icon.png": png_icon(80),
         "largeIcon.png": png_icon(130),
     }
@@ -846,10 +1086,10 @@ TIZEN_CONFIG = """<?xml version="1.0" encoding="UTF-8"?>
 """ % (APP_VERSION, TIZEN_APP_ID, TIZEN_PKG_ID)
 
 
-def tizen_files(country=0, city=0, log=None):
+def tizen_files(country=0, city=0, log=None, features=None):
     files = {
         "config.xml": TIZEN_CONFIG.encode("utf-8"),
-        "index.html": page(country, city, log=log).encode("utf-8"),
+        "index.html": page(country, city, log=log, features=features).encode("utf-8"),
         "icon.png": png_icon(117),
     }
     files.update(_photo_files())
@@ -857,9 +1097,9 @@ def tizen_files(country=0, city=0, log=None):
     return files
 
 
-def tizen_unsigned_zip(country=0, city=0):
+def tizen_unsigned_zip(country=0, city=0, features=None):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for n, d in tizen_files(country, city).items():
+        for n, d in tizen_files(country, city, features=features).items():
             z.writestr(n, d)
     return buf.getvalue()

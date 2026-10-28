@@ -314,7 +314,7 @@ def find_tizen():
     return None
 
 
-def samsung_screen_install(ip, country, city, profile):
+def samsung_screen_install(ip, country, city, profile, features=None):
     tz = find_tizen()
     if not tz:
         raise RuntimeError("سامسونج تقبل فقط تطبيقات موقّعة بشهادة خاصة بشاشتك. ثبّت Tizen Studio "
@@ -322,7 +322,7 @@ def samsung_screen_install(ip, country, city, profile):
     work = tempfile.mkdtemp(prefix="shashati_")
     try:
         font_log = []
-        for name, data in screen.tizen_files(country, city, font_log).items():
+        for name, data in screen.tizen_files(country, city, font_log, features=features).items():
             os.makedirs(os.path.dirname(os.path.join(work, name)), exist_ok=True)
             with open(os.path.join(work, name), "wb") as f:
                 f.write(data)
@@ -749,7 +749,8 @@ class Panel(http.server.BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(u.query)
             if q.get("k", [""])[0] != TOKEN:
                 return self._send(b"forbidden", "text/plain", 403)
-            html = screen.page(int(q.get("country", ["0"])[0] or 0), int(q.get("city", ["0"])[0] or 0),
+            feats = {k: q.get(k, ["1"])[0] == "1" for k in screen.FEATURES}
+            html = screen.page(int(q.get("country", ["0"])[0] or 0), int(q.get("city", ["0"])[0] or 0), features=feats,
                                photo_base="/screen-photo/", photo_suffix="?k=" + TOKEN,
                                keep_src="data:video/mp4;base64," + screen.KEEP_MP4_B64)
             return self._send(html.encode(), "text/html; charset=utf-8")
@@ -811,15 +812,14 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 ipaddress.ip_address(ip)
                 country, city = int(req.get("country", 0)), int(req.get("city", 0))
                 stock_log = []
-                if not screen.photo_names():
-                    screen.fetch_stock_photos(stock_log)
+                screen.fetch_stock_photos(stock_log, only_if_empty=True)
                 if req.get("brand") == "lg":
                     font_log = []
-                    pkg = screen.lg_ipk(country, city, font_log)
+                    pkg = screen.lg_ipk(country, city, font_log, features=req.get("features"))
                     ok, log = lg_install(ip, pkg, "Shashati.ipk", req.get("mode", "dev"), req.get("secret", ""))
                     log[0:0] = font_log
                 elif req.get("brand") == "samsung":
-                    ok, log = samsung_screen_install(ip, country, city, req.get("profile", "").strip())
+                    ok, log = samsung_screen_install(ip, country, city, req.get("profile", "").strip(), req.get("features"))
                 else:
                     raise ValueError("نوع شاشة غير معروف.")
                 log[0:0] = stock_log
@@ -828,9 +828,9 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 req = json.loads(self._body() or b"{}")
                 country, city = int(req.get("country", 0)), int(req.get("city", 0))
                 if req.get("brand") == "lg":
-                    data, name = screen.lg_ipk(country, city), "Shashati.ipk"
+                    data, name = screen.lg_ipk(country, city, features=req.get("features")), "Shashati.ipk"
                 else:
-                    data, name = screen.tizen_unsigned_zip(country, city), "Shashati-tizen-unsigned.zip"
+                    data, name = screen.tizen_unsigned_zip(country, city, features=req.get("features")), "Shashati-tizen-unsigned.zip"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
                 self.send_header("Content-Disposition", 'attachment; filename="%s"' % name)
@@ -992,6 +992,16 @@ pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-ra
       <label>المدينة <select id="screenCity"></select></label>
       <label>ملف شهادة سامسونج <input id="tzProfile" placeholder="اسم الـ Profile" style="direction:ltr;width:11rem"></label>
     </div>
+    <fieldset style="border:1px solid var(--line);border-radius:10px;padding:.6rem 1rem;margin:0 0 .8rem">
+      <legend class="muted" style="padding:0 .4rem">وش يظهر في شاشتي؟</legend>
+      <div class="row">
+        <label><input type="checkbox" id="fVerses" checked onchange="saveFeats()"> آيات قرآنية</label>
+        <label><input type="checkbox" id="fHadith" checked onchange="saveFeats()"> أحاديث صحيح البخاري</label>
+        <label><input type="checkbox" id="fMatches" checked onchange="saveFeats()"> مباريات اليوم</label>
+        <label><input type="checkbox" id="fWeather" checked onchange="saveFeats()"> الطقس</label>
+      </div>
+      <p class="muted" style="font-size:.85rem;margin:.4rem 0 0">الساعة والتاريخ ومواقيت الصلاة تظهر دائماً. الآيات والأحاديث تتبدّل كل ٥ دقائق.</p>
+    </fieldset>
     <p class="muted" style="font-size:.92rem">تثبّتها من زر «ثبّت شاشتي» في بطاقة كل شاشة فوق. تفتحها من قائمة التطبيقات، وتغيّر المدينة من الشاشة نفسها بزر OK.</p>
     <details style="margin-top:.6rem">
       <summary>عشان تفتح تلقائياً مع تشغيل الشاشة</summary>
@@ -1165,6 +1175,20 @@ function render() {
         </div>
         <div class="row"><button id="scr${i}" onclick="installScreen(${i})">ثبّت شاشتي</button>${sam && !INFO.tizen ? '<span class="muted" style="font-size:.88rem">يحتاج Tizen Studio وشهادة سامسونج</span>' : ''}</div>
         <p class="muted" style="font-size:.88rem">${sam ? 'ملفات ‎.wgt — مثل TizenBrew (ومعه TizenTube ليوتيوب بدون إعلانات).' : 'ملفات ‎.ipk — مثل Homebrew Channel أو YouTube AdFree من مشروع webosbrew.'}</p>
+        <details>
+          <summary>منع الإعلانات بشكل دائم على هذي الشاشة (بدون الكمبيوتر)</summary>
+          <ol>
+            ${sam
+              ? '<li>الإعدادات ← عام ← الشبكة ← حالة الشبكة ← إعدادات IP.</li><li>إعداد DNS ← إدخال يدوي.</li>'
+              : '<li>الإعدادات ← عام ← الشبكة ← اختر Wi‑Fi أو السلكي ← الإعدادات المتقدمة ← تعديل.</li><li>ألغِ «تلقائي» عند DNS.</li>'}
+            <li>اكتب خادم DNS: <b dir="ltr">94.140.14.14</b> (وإذا فيه خانة ثانية: <b dir="ltr">94.140.15.15</b>) واحفظ. هذا خادم AdGuard المجاني لحجب الإعلانات، يشتغل دائماً حتى لو الكمبيوتر مطفي.</li>
+            ${sam
+              ? '<li>الإعدادات ← الدعم ← الشروط والخصوصية: ألغِ الموافقة على خدمات الإعلانات المخصّصة ومعلومات المشاهدة.</li>'
+              : '<li>الإعدادات ← عام ← النظام ← إعدادات إضافية ← الإعلانات: فعّل «تقييد تتبع الإعلانات»، وأطفئ Home Promotion و Content Recommendation.</li>'}
+            <li>أعد تشغيل الشاشة. وإذا تعطّل تطبيق معيّن، رجّع DNS إلى «تلقائي».</li>
+          </ol>
+          <p class="muted" style="font-size:.85rem">تبيه يشمل كل أجهزة البيت؟ حط نفس الرقمين في إعدادات DNS داخل المودم بدل الشاشة.</p>
+        </details>
         <pre class="log" id="log${i}" hidden></pre>
       </div>
     </article>`;
@@ -1189,15 +1213,35 @@ async function install(i) {
   log.textContent = (j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم التثبيت. تلقاه في قائمة التطبيقات بالشاشة.' : 'ما اكتمل التثبيت. شوف التفاصيل فوق.');
 }
 
+const FEAT_IDS = {verses: 'fVerses', hadith: 'fHadith', matches: 'fMatches', weather: 'fWeather'};
+function feats() { const o = {}; for (const k in FEAT_IDS) o[k] = $(FEAT_IDS[k]).checked; return o; }
+function saveFeats() { try { localStorage.setItem('tvm_feats', JSON.stringify(feats())); } catch (e) {} }
+function loadFeats() {
+  try { const o = JSON.parse(localStorage.getItem('tvm_feats') || '{}'); for (const k in FEAT_IDS) if (k in o) $(FEAT_IDS[k]).checked = !!o[k]; } catch (e) {}
+}
 function screenCountry() { return +($('screenCountry').value || 0); }
 function screenCity() { return +($('screenCity').value || 0); }
 function fillCities() {
   const c = (INFO.countries || [])[screenCountry()];
   $('screenCity').innerHTML = c ? c[1].map((n, i) => `<option value="${i}">${esc(n)}</option>`).join('') : '';
 }
-function previewScreen() { window.open('/screen-preview?k=' + encodeURIComponent(K) + '&country=' + screenCountry() + '&city=' + screenCity(), '_blank'); }
+async function previewScreen() {
+  const w = window.open('', '_blank');
+  const f = feats();
+  const url = '/screen-preview?k=' + encodeURIComponent(K) + '&country=' + screenCountry() + '&city=' + screenCity() +
+    Object.keys(f).map(k => '&' + k + '=' + (f[k] ? 1 : 0)).join('');
+  const c = await api('/api/photos');
+  if (!c.count) {
+    if (w) w.document.write('<meta charset="utf-8"><body style="background:#111;color:#eee;font-family:sans-serif;display:grid;place-items:center;height:90vh" dir="rtl"><h2>أحمّل صور الخلفية لأول مرة… دقيقة وحدة</h2></body>');
+    $('photoNote').textContent = 'أحمّل الصور الجاهزة…';
+    const j = await api('/api/photos/stock', {method: 'POST'});
+    await photoCount();
+    if (j.log) $('photoNote').textContent += ' ' + j.log[j.log.length - 1];
+  }
+  if (w) w.location = url; else window.open(url, '_blank');
+}
 async function downloadScreen(brand) {
-  const r = await fetch('/api/screen/package', {method: 'POST', headers: {'X-Key': K}, body: JSON.stringify({brand, country: screenCountry(), city: screenCity()})});
+  const r = await fetch('/api/screen/package', {method: 'POST', headers: {'X-Key': K}, body: JSON.stringify({brand, country: screenCountry(), city: screenCity(), features: feats()})});
   if (!r.ok) return;
   const blob = await r.blob(), a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1207,7 +1251,7 @@ async function downloadScreen(brand) {
 async function installScreen(i) {
   const d = DEVS[i], log = $('log' + i);
   log.hidden = false;
-  const body = {brand: d.brand, ip: d.ip, country: screenCountry(), city: screenCity(), profile: $('tzProfile').value};
+  const body = {brand: d.brand, ip: d.ip, country: screenCountry(), city: screenCity(), profile: $('tzProfile').value, features: feats()};
   if (d.brand === 'lg') {
     body.mode = $('mode' + i).value; body.secret = $('secret' + i).value.trim();
     if (body.mode === 'dev' && !body.secret) { log.textContent = 'اكتب الـ Passphrase من تطبيق Developer Mode.'; return; }
@@ -1306,6 +1350,7 @@ async function saveLists() {
   paintDns(await api('/api/dns/lists', {method: 'POST', body: JSON.stringify({custom: lines('custom'), allow: lines('allow'), upstream: $('upstream').value})}));
 }
 
+loadFeats();
 loadInfo().then(() => scan(false));
 photoCount();
 api('/api/dns').then(paintDns);
@@ -1330,6 +1375,8 @@ def main():
     if paramiko is None:
         print(" [!] paramiko not installed (needed for LG): pip install paramiko")
     threading.Timer(1.0, lambda: webbrowser.open(pc_url)).start()
+    threading.Thread(target=lambda: (screen.bukhari_hadiths(), screen.fetch_stock_photos([], only_if_empty=True)),
+                     daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
