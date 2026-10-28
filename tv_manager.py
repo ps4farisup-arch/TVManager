@@ -341,6 +341,86 @@ def samsung_screen_install(ip, country, city, profile):
         shutil.rmtree(work, ignore_errors=True)
 
 
+# ---------------------------------------------------------------- مفتاح webOS (قراءة متسامحة)
+def _der_read(buf, i):
+    tag = buf[i]
+    n = buf[i + 1]
+    i += 2
+    if n & 0x80:
+        cnt = n & 0x7F
+        n = int.from_bytes(buf[i:i + cnt], "big")
+        i += cnt
+    return tag, buf[i:i + n], i + n
+
+
+def _der_ints(buf):
+    """يقرأ كل الأعداد داخل SEQUENCE بدون تشدد في الترميز."""
+    tag, body, _ = _der_read(buf, 0)
+    if tag != 0x30:
+        raise ValueError("not a sequence")
+    out, i = [], 0
+    while i < len(body):
+        t, v, i = _der_read(body, i)
+        if t == 0x02:
+            out.append(int.from_bytes(v, "big"))
+        elif t == 0x04:                      # PKCS#8: المفتاح داخل OCTET STRING
+            return _der_ints(v)
+    return out
+
+
+def load_webos_key(pem, passphrase):
+    """بعض شاشات LG الحديثة ترمّز مفتاحها بشكل ترفضه مكتبة cryptography الجديدة؛ نفكه يدوياً."""
+    import base64
+    import hashlib
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    lines = [l.strip() for l in pem.strip().splitlines()]
+    headers, body = {}, []
+    for l in lines[1:-1]:
+        if ":" in l:
+            k, v = l.split(":", 1)
+            headers[k.strip()] = v.strip()
+        elif l:
+            body.append(l)
+    data = base64.b64decode("".join(body))
+    dek = headers.get("DEK-Info")
+    if dek:
+        cipher_name, iv_hex = [x.strip() for x in dek.split(",")]
+        iv = bytes.fromhex(iv_hex)
+        sizes = {"AES-128-CBC": 16, "AES-192-CBC": 24, "AES-256-CBC": 32, "DES-EDE3-CBC": 24}
+        if cipher_name not in sizes:
+            raise ValueError("تشفير غير مدعوم: " + cipher_name)
+        pw, key, prev = passphrase.encode(), b"", b""
+        while len(key) < sizes[cipher_name]:
+            prev = hashlib.md5(prev + pw + iv[:8]).digest()
+            key += prev
+        key = key[:sizes[cipher_name]]
+        if cipher_name.startswith("AES"):
+            algo = algorithms.AES(key)
+        else:
+            try:
+                from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+            except ImportError:
+                TripleDES = algorithms.TripleDES
+            algo = TripleDES(key)
+        dec = Cipher(algo, modes.CBC(iv)).decryptor()
+        plain = dec.update(data) + dec.finalize()
+        pad = plain[-1]
+        if not 1 <= pad <= len(iv) or plain[-pad:] != bytes([pad]) * pad:
+            raise ValueError("الـ Passphrase لا تطابق المفتاح")
+        data = plain[:-pad]
+    ints = _der_ints(data)
+    if len(ints) >= 9:
+        ints = ints[1:]
+    n, e, d, p, q = ints[:5]
+    if p * q != n:
+        raise ValueError("المفتاح بعد فكه غير سليم")
+    pub = rsa.RSAPublicNumbers(e, n)
+    return rsa.RSAPrivateNumbers(p, q, d, rsa.rsa_crt_dmp1(d, p), rsa.rsa_crt_dmq1(d, q),
+                                 rsa.rsa_crt_iqmp(p, q), pub).private_key()
+
+
 # ---------------------------------------------------------------- تثبيت على LG
 def _lg_ssh(ip, mode, secret):
     if paramiko is None:
@@ -373,6 +453,11 @@ def _lg_ssh(ip, mode, secret):
                 errors.append("%s: %s" % (cls_name, e))
         if key:
             break
+    if key is None:
+        try:
+            key = paramiko.RSAKey(key=load_webos_key(pem, raw))
+        except Exception as e:
+            errors.append("webOS: %s" % e)
     if key is None:
         raise RuntimeError("ما قدرت أفتح مفتاح الشاشة بالـ Passphrase هذي.\n"
                            "نوع المفتاح: " + pem.strip().splitlines()[0][:60] + "\n"
