@@ -1,0 +1,29 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tv_manager.py"
+      - ".github/workflows/build-exe.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install pyinstaller==6.11.1 paramiko==3.5.0
+
+      - name: Build TVManager.exe
+        run: pyinstaller --onefile --uac-admin --name TVManager tv_manager.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TVManager-Windows
+          path: dist/TVManager.exe
