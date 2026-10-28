@@ -9,8 +9,10 @@
   - Samsung: ملفات .wgt تحتاج توقيعها بشهادة سامسونج عبر Tizen Studio
 """
 
+import base64
 import io
 import json
+import os
 import struct
 import tarfile
 import time
@@ -105,74 +107,95 @@ PAGE_TEMPLATE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>شاشتي</title>
-<link href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;500;700&display=swap" rel="stylesheet">
 <style>
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0a1230;color:#fff;
-  font-family:"Readex Pro","Samsung Sans Arabic","LG Smart UI","Noto Sans Arabic",Tahoma,sans-serif}
-#sky{position:fixed;top:0;left:0;right:0;bottom:0;-webkit-transition:background 6s;transition:background 6s}
-#sun{position:fixed;width:38vw;height:38vw;border-radius:50%;top:-10vw;left:-8vw;
-  background:radial-gradient(circle,rgba(255,236,190,.35) 0%,rgba(255,236,190,0) 65%);opacity:0;-webkit-transition:opacity 6s;transition:opacity 6s}
-#stars,.scene,#shade{position:fixed;top:0;left:0;right:0;bottom:0}
-#stars svg,.scene svg{width:100%;height:100%;display:block}
-#stars{-webkit-transition:opacity 6s;transition:opacity 6s}
-.scene{opacity:0;-webkit-transition:opacity 5s;transition:opacity 5s}
-.scene.on{opacity:1}
+__FONTS__
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;color:#f4efe6;
+  font-family:"ShUI","IBM Plex Sans Arabic","LG Smart UI","Samsung Sans Arabic","Noto Sans Arabic",Tahoma,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.layer,#sky,#stars,#scrim{position:fixed;top:0;left:0;right:0;bottom:0}
+#sky{-webkit-transition:background 6s;transition:background 6s}
+.layer{opacity:0;-webkit-transition:opacity 2.5s;transition:opacity 2.5s;background-size:cover;background-position:center}
+.layer.on{opacity:1}
+.layer svg,#stars svg{width:100%;height:100%;display:block}
+#stars{-webkit-transition:opacity 4s;transition:opacity 4s}
 .f1,.f2,.f3,.sea,.lt,.st,.rf,.mr,.gl{-webkit-transition:fill 6s,opacity 6s;transition:fill 6s,opacity 6s}
-#shade{top:auto;height:48%;background:linear-gradient(to bottom,rgba(0,0,0,0),rgba(0,0,0,.42))}
-#place{position:fixed;bottom:2.4vh;left:0;right:0;text-align:center;font-size:1.15vw;opacity:.85;text-shadow:0 .1vw .6vw rgba(0,0,0,.5)}
-#place span{border:1px solid rgba(255,255,255,.45);border-radius:1vw;padding:0 .7vw;margin-right:.7vw;font-size:.95vw}
-#wrap{position:absolute;top:5vh;bottom:6vh;left:4.5vw;right:4.5vw;-webkit-transition:-webkit-transform 3s;transition:transform 3s}
-.row{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-pack:justify;-webkit-justify-content:space-between;justify-content:space-between}
-.top{-webkit-align-items:flex-start;align-items:flex-start;height:62%}
-.bottom{-webkit-align-items:flex-end;align-items:flex-end;height:38%}
-#clock{font-size:14vw;font-weight:300;line-height:1;text-shadow:0 .5vw 2.5vw rgba(0,0,0,.25)}
-#ampm{font-size:3vw;font-weight:500;margin-right:1vw;opacity:.85}
-#hijri{font-size:3vw;font-weight:500;margin-top:1.4vw}
-#greg{font-size:2vw;opacity:.85;margin-top:.3vw}
-#cityName{font-size:1.5vw;opacity:.7;margin-top:1vw}
-.panel{background:rgba(5,10,25,.28);border-radius:1.6vw;padding:1.2vw 1.8vw;min-width:24vw}
-.p{font-size:2vw;padding:.42vw 0;border-bottom:1px solid rgba(255,255,255,.12)}
-.p:last-child{border-bottom:0}
-.p span{float:left}
-.p.next{color:#ffd98a;font-weight:700}
-#countdown{font-size:1.6vw;color:#ffd98a;margin-top:.9vw;text-align:center}
-#wx{display:-webkit-box;display:-webkit-flex;display:flex}
-.day{margin-left:3vw;text-align:center}
-.day .t{display:block;font-size:2.8vw;font-weight:500;line-height:1.2}
-.day .n{font-size:1.4vw;opacity:.85}
-.day .d{display:block;font-size:1.3vw;opacity:.75}
-#verse{max-width:48vw;font-size:2vw;line-height:1.9;text-align:right;text-shadow:0 .2vw 1vw rgba(0,0,0,.3)}
-#verseSrc{display:block;font-size:1.3vw;opacity:.75;margin-top:.4vw}
-#hint{position:fixed;top:1.2vh;left:0;right:0;text-align:center;font-size:1.2vw;opacity:.6;-webkit-transition:opacity 2s;transition:opacity 2s}
-#picker{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(4,8,20,.88)}
-#picker h2{font-size:2.4vw;font-weight:500;text-align:center;margin:5vh 0 2vh}
-#list{width:34vw;height:72vh;margin:0 auto;overflow:hidden;position:relative}
-#list div{font-size:1.9vw;padding:.7vw 1.4vw;border-radius:.8vw;border:.2vw solid transparent}
-#list div.sel{border-color:#ffd98a;color:#ffd98a;background:rgba(255,217,138,.08)}
+#scrim{background:linear-gradient(to bottom,rgba(4,5,10,.62) 0%,rgba(4,5,10,.18) 26%,rgba(4,5,10,.08) 50%,rgba(4,5,10,.35) 70%,rgba(4,5,10,.82) 100%)}
+.gold{color:#d9b46a}
+.muted{color:rgba(244,239,230,.68)}
+#ui{position:absolute;top:4.6vh;bottom:4.2vh;left:4vw;right:4vw;-webkit-transition:-webkit-transform 3s;transition:transform 3s;
+  text-shadow:0 .1vw .8vw rgba(0,0,0,.45)}
+
+/* أعلى الشاشة */
+.top{position:absolute;top:0;left:0;right:0;height:16vh}
+.date{position:absolute;right:0;top:0;min-width:30vw;text-align:right;padding-bottom:.9vw;border-bottom:1px solid rgba(217,180,106,.55)}
+.date .h{font-size:2.15vw;font-weight:600;line-height:1.25}
+.date .g{font-size:1.25vw;margin-top:.35vw}
+.wx{position:absolute;left:0;top:0;min-width:20vw;text-align:left;padding-bottom:.9vw;border-bottom:1px solid rgba(217,180,106,.55)}
+.wx .now{font-size:2.15vw;font-weight:600;line-height:1.25;direction:rtl;text-align:left}
+.wx .now b{font-weight:600;margin-left:.8vw}
+.wx .sub{font-size:1.25vw;margin-top:.35vw;text-align:left}
+.days{margin-top:.8vw;font-size:1.15vw;text-align:left}
+.days span{margin-right:1.6vw}
+
+/* الوسط */
+.clockbox{position:absolute;right:0;top:27vh;text-align:right}
+#clock{display:inline-block;direction:ltr;font-size:12.5vw;font-weight:600;line-height:1;letter-spacing:-.01em;white-space:nowrap}
+#clock i{font-style:normal;color:#d9b46a;margin:0 .3vw}
+#ampm{display:inline-block;font-size:2.6vw;font-weight:600;color:#d9b46a;vertical-align:top;margin-right:.9vw;position:relative;top:1.4vw}
+#tz{font-size:1.25vw;margin-top:.6vw}
+#tz:before{content:"";display:inline-block;width:.5vw;height:.5vw;border-radius:50%;background:#d9b46a;margin-left:.6vw;vertical-align:middle}
+.card{position:absolute;left:0;top:33vh;width:44vw;background:rgba(14,12,9,.55);border:1px solid rgba(255,255,255,.1);border-radius:1vw;padding:1.3vw 1.7vw 1.2vw;text-shadow:none}
+.card .lbl{font-size:1.15vw;color:#d9b46a;padding-bottom:.6vw;border-bottom:1px solid rgba(217,180,106,.4);margin-bottom:.9vw}
+#verse{font-family:"ShQ","Amiri","Noto Naskh Arabic","Traditional Arabic",serif;font-size:2.05vw;line-height:1.85}
+#verseSrc{font-size:1.15vw;color:#d9b46a;margin-top:.6vw}
+
+/* أسفل الشاشة */
+.bottom{position:absolute;left:0;right:0;bottom:0;border-top:1px solid rgba(217,180,106,.55);padding-top:1.5vw;height:15vh}
+.next{position:absolute;right:0;top:1.5vw;text-align:right}
+.next .lbl{font-size:1.15vw;color:#d9b46a}
+.next .nm{font-size:2.6vw;font-weight:600;line-height:1.3}
+.next .left{font-size:1.2vw}
+.times{position:absolute;left:50%;top:1.9vw;white-space:nowrap;-webkit-transform:translateX(-50%);transform:translateX(-50%)}
+.t{display:inline-block;margin:0 1vw;text-align:center;opacity:.82;vertical-align:top}
+.t span{display:block;font-size:1.05vw;color:rgba(244,239,230,.7)}
+.t b{display:block;font-size:1.65vw;font-weight:500;margin-top:.15vw}
+.t.on{opacity:1}
+.t.on span,.t.on b{color:#d9b46a}
+.place{position:absolute;left:0;top:1.5vw;text-align:left}
+.place .lbl{font-size:1.15vw;color:#d9b46a;direction:rtl}
+.place .nm{font-size:1.75vw;font-weight:600;line-height:1.4;direction:rtl}
+.place .nav{font-size:1.05vw;direction:rtl}
+
+#hint{position:fixed;top:1.4vh;left:0;right:0;text-align:center;font-size:1vw;opacity:.7;-webkit-transition:opacity 2s;transition:opacity 2s}
+#picker{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(5,6,10,.9)}
+#picker h2{font-size:2.2vw;font-weight:600;text-align:center;margin:6vh 0 2.5vh;color:#d9b46a}
+#list{width:32vw;height:70vh;margin:0 auto;overflow:hidden;position:relative}
+#list div{font-size:1.8vw;padding:.65vw 1.4vw;border-radius:.7vw;border:.15vw solid transparent}
+#list div.sel{border-color:#d9b46a;color:#d9b46a;background:rgba(217,180,106,.08)}
 </style>
 </head>
 <body>
 <style id="pal"></style>
-<div id="sky"></div><div id="sun"></div><div id="stars"></div>
-<div class="scene" id="sA"></div><div class="scene" id="sB"></div><div id="shade"></div>
-<div id="wrap">
-  <div class="row top">
-    <div>
-      <div><span id="clock">--:--</span><span id="ampm"></span></div>
-      <div id="hijri"></div>
-      <div id="greg"></div>
-      <div id="cityName"></div>
-    </div>
-    <div class="panel"><div id="prayers"></div><div id="countdown"></div></div>
+<div id="sky"></div><div id="stars"></div>
+<div class="layer" id="lA"></div><div class="layer" id="lB"></div>
+<div id="scrim"></div>
+<div id="ui">
+  <div class="top">
+    <div class="date"><div class="h" id="hijri">&nbsp;</div><div class="g muted" id="greg"></div></div>
+    <div class="wx"><div class="now" id="wxNow">&nbsp;</div><div class="sub muted" id="wxSub"></div><div class="days" id="wxDays"></div></div>
   </div>
-  <div class="row bottom">
-    <div id="wx"></div>
-    <div id="verse"></div>
+  <div class="clockbox"><div dir="ltr" style="text-align:right"><span id="ampm"></span><span id="clock"></span></div><div id="tz" class="muted"></div></div>
+  <div class="card" id="card" style="display:none"><div class="lbl">آية اليوم</div><div id="verse"></div><div id="verseSrc"></div></div>
+  <div class="bottom">
+    <div class="next"><div class="lbl">الصلاة القادمة</div><div class="nm" id="nextName">&nbsp;</div><div class="left muted" id="nextLeft"></div></div>
+    <div class="times" id="times"></div>
+    <div class="place"><div class="lbl" id="placeTag"></div><div class="nm" id="placeName"></div><div class="nav muted">◀ ▶ لتغيير الخلفية</div></div>
   </div>
 </div>
-<div id="place"></div>
+<video id="keep" muted loop playsinline autoplay style="position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none"></video>
 <div id="hint">اضغط OK لتغيير الدولة والمدينة</div>
 <div id="picker"><h2 id="pickTitle">اختر دولتك</h2><div id="list"></div></div>
+<script src="$WEBAPIS/webapis/webapis.js"></script>
 <script>
 var CFG = __CONFIG__;
 var ORDER = ['Fajr','Sunrise','Dhuhr','Asr','Maghrib','Isha'];
@@ -180,20 +203,21 @@ var NAMES = {Fajr:'الفجر',Sunrise:'الشروق',Dhuhr:'الظهر',Asr:'ا
 var DAYS = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
 var MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 var SKY = {
-  night:'linear-gradient(165deg,#070d24 0%,#132147 55%,#22355f 100%)',
-  dawn:'linear-gradient(170deg,#24315f 0%,#6d5687 50%,#e09a76 100%)',
-  day:'linear-gradient(170deg,#1b6894 0%,#4c98bd 50%,#d8b886 100%)',
-  dusk:'linear-gradient(170deg,#34587f 0%,#c4864f 58%,#ebb86d 100%)',
-  evening:'linear-gradient(170deg,#24183f 0%,#633555 52%,#b8694a 100%)'
+  night:'linear-gradient(170deg,#04060d 0%,#0b1224 55%,#16203a 100%)',
+  dawn:'linear-gradient(170deg,#141a2e 0%,#4a3c55 55%,#a8735a 100%)',
+  day:'linear-gradient(170deg,#23506d 0%,#6c97ae 55%,#cdb894 100%)',
+  dusk:'linear-gradient(170deg,#24304a 0%,#8a5e42 58%,#c8925a 100%)',
+  evening:'linear-gradient(170deg,#140f1f 0%,#3e2638 55%,#7c4638 100%)'
 };
 var PAL = {
-  night:   ['#1b2a4c','#121c37','#080d1d','#0c1630',.95,.9,.12,.25],
-  dawn:    ['#7a6890','#4d4068','#261d3a','#4b4a74',.6,.3,.25,.45],
-  day:     ['#9eabb6','#8b7058','#45322a','#2d7fa3',0,0,.3,.6],
-  dusk:    ['#b08468','#7a4e3a','#33201a','#6a5a70',.35,0,.3,.55],
-  evening: ['#7c4a68','#47284a','#1c1128','#2c2346',.85,.5,.2,.35]
+  night:   ['#141f38','#0d1428','#05080f','#08101f',.95,.85,.10,.22],
+  dawn:    ['#5a4c66','#3a2f4c','#1a1426','#3a3a58',.6,.25,.2,.4],
+  day:     ['#8e9aa3','#6f5b49','#33261f','#2b6a86',0,0,.25,.5],
+  dusk:    ['#8f6a55','#5c3b2d','#241612','#4e4456',.35,0,.25,.45],
+  evening: ['#5c3a50','#352035','#140c1c','#211a34',.85,.45,.18,.3]
 };
-var P = null, picking = false, pickMode = 'country', sel = 0, pickCountry = 0, curPhase = '', curScene = -1, layerA = true;
+var P = null, W = null, picking = false, pickMode = 'country', sel = 0, pickCountry = 0, curPhase = '';
+var BG = [], bgIdx = 0, bgShown = -1, lastSwitch = 0, layerA = true;
 
 function $(id){ return document.getElementById(id); }
 function pad(n){ return n < 10 ? '0' + n : '' + n; }
@@ -219,10 +243,11 @@ function city(){ return country()[3][loc[1]]; }
 function lkey(){ return loc[0] + '_' + loc[1]; }
 function dkey(d){ return pad(d.getDate()) + '-' + pad(d.getMonth() + 1) + '-' + d.getFullYear(); }
 function mins(s){ var a = s.split(':'); return (+a[0]) * 60 + (+a[1]); }
-function t12(s){
-  var m = mins(s), h = Math.floor(m / 60), mm = m % 60, h12 = h % 12 || 12;
-  return ar(h12 + ':' + pad(mm));
+function t12(s, withAmpm){
+  var m = mins(s), h = Math.floor(m / 60), h12 = h % 12 || 12;
+  return ar(h12 + ':' + pad(m % 60)) + (withAmpm ? (h < 12 ? ' ص' : ' م') : '');
 }
+function pname(k, d){ return (k === 'Dhuhr' && d.getDay() === 5) ? 'الجمعة' : NAMES[k]; }
 
 function phase(m){
   if (!P){ var h = Math.floor(m / 60); return h < 5 || h >= 19 ? 'night' : (h < 7 ? 'dawn' : (h < 15 ? 'day' : (h < 18 ? 'dusk' : 'evening'))); }
@@ -233,43 +258,48 @@ function phase(m){
   if (m < g) return 'dusk';
   return 'evening';
 }
-
 function nextPrayer(m){
   var list = ['Fajr','Dhuhr','Asr','Maghrib','Isha'];
   for (var i = 0; i < list.length; i++){ var t = mins(P.t[list[i]]); if (t > m) return {k: list[i], left: t - m}; }
   return {k: 'Fajr', left: mins(P.t.Fajr) + 1440 - m};
 }
+function leftText(n){
+  var h = Math.floor(n / 60), m = n % 60, out = [];
+  if (h) out.push(h === 1 ? 'ساعة' : (h === 2 ? 'ساعتين' : ar(h) + (h <= 10 ? ' ساعات' : ' ساعة')));
+  if (m) out.push(m === 1 ? 'دقيقة' : (m === 2 ? 'دقيقتين' : ar(m) + (m <= 10 ? ' دقائق' : ' دقيقة')));
+  return out.length ? 'بعد ' + out.join(' و') : 'الآن';
+}
+
+function applyPhase(ph){
+  if (ph === curPhase) return;
+  curPhase = ph;
+  var c = PAL[ph];
+  $('sky').style.background = SKY[ph];
+  $('stars').style.opacity = c[5] ? '1' : '0';
+  $('pal').innerHTML = '.f1{fill:' + c[0] + '}.f2{fill:' + c[1] + '}.f3{fill:' + c[2] + '}.sea{fill:' + c[3] + '}' +
+    '.lt{fill:#ffcf7a;opacity:' + c[4] + '}.st{fill:#fff;opacity:' + c[5] + '}.rf{fill:#fff;opacity:' + c[6] + '}' +
+    '.mr{opacity:' + c[7] + '}.gl{fill:#d9b46a;opacity:' + (c[4] * .6 + .4) + '}.cv{fill:#fff;opacity:.12}';
+}
 
 function tick(){
-  var d = new Date(), m = d.getHours() * 60 + d.getMinutes();
-  var h12 = d.getHours() % 12 || 12;
-  $('clock').innerHTML = ar(h12 + ':' + pad(d.getMinutes()));
+  var d = new Date(), m = d.getHours() * 60 + d.getMinutes(), h12 = d.getHours() % 12 || 12;
+  $('clock').innerHTML = ar(h12) + '<i>:</i>' + ar(pad(d.getMinutes()));
   $('ampm').innerHTML = d.getHours() < 12 ? 'ص' : 'م';
-  $('greg').innerHTML = DAYS[d.getDay()] + '، ' + ar(d.getDate()) + ' ' + MONTHS[d.getMonth()] + ' ' + ar(d.getFullYear());
-  $('cityName').innerHTML = city()[0] + '، ' + country()[0];
-  var ph = phase(m);
-  if (ph !== curPhase){
-    curPhase = ph;
-    var c = PAL[ph];
-    $('sky').style.background = SKY[ph];
-    $('sun').style.opacity = (ph === 'day' || ph === 'dusk' || ph === 'dawn') ? '1' : '0';
-    $('pal').innerHTML = '.f1{fill:' + c[0] + '}.f2{fill:' + c[1] + '}.f3{fill:' + c[2] + '}.sea{fill:' + c[3] + '}' +
-      '.lt{fill:#ffcf7a;opacity:' + c[4] + '}.st{fill:#fff;opacity:' + c[5] + '}.rf{fill:#fff;opacity:' + c[6] + '}' +
-      '.mr{opacity:' + c[7] + '}.gl{fill:#e9b85c;opacity:' + (c[4] * .6 + .4) + '}.cv{fill:#fff;opacity:.13}';
-  }
-  showScene();
+  $('greg').innerHTML = ar(d.getDate()) + ' ' + MONTHS[d.getMonth()] + ' ' + ar(d.getFullYear());
+  $('tz').innerHTML = 'بتوقيت ' + city()[0];
+  applyPhase(phase(m));
+  if (Date.now() - lastSwitch >= 5 * 60000) setBg(bgIdx + 1);
   if (P && P.date !== dkey(d)) loadPrayers();
-  if (!P) return;
-  $('hijri').innerHTML = P.hijri;
-  var n = nextPrayer(m), html = '', friday = d.getDay() === 5;
+  if (!P){ $('hijri').innerHTML = DAYS[d.getDay()]; return; }
+  $('hijri').innerHTML = DAYS[d.getDay()] + '، ' + P.hijri;
+  var n = nextPrayer(m), html = '';
   for (var i = 0; i < ORDER.length; i++){
-    var k = ORDER[i], name = (k === 'Dhuhr' && friday) ? 'الجمعة' : NAMES[k];
-    html += '<div class="p' + (k === n.k ? ' next' : '') + '">' + name + '<span>' + t12(P.t[k]) + '</span></div>';
+    var k = ORDER[i];
+    html += '<div class="t' + (k === n.k ? ' on' : '') + '"><span>' + pname(k, d) + '</span><b>' + t12(P.t[k]) + '</b></div>';
   }
-  $('prayers').innerHTML = html;
-  var hh = Math.floor(n.left / 60), mm = n.left % 60;
-  var left = hh ? ar(hh) + ' س ' + ar(mm) + ' د' : ar(mm) + ' دقيقة';
-  $('countdown').innerHTML = 'باقي على ' + ((n.k === 'Dhuhr' && friday) ? 'الجمعة' : NAMES[n.k]) + ' ' + left;
+  $('times').innerHTML = html;
+  $('nextName').innerHTML = pname(n.k, d) + ' ' + t12(P.t[n.k], true);
+  $('nextLeft').innerHTML = leftText(n.left);
 }
 
 function loadPrayers(){
@@ -280,7 +310,7 @@ function loadPrayers(){
     if (j && j.data && j.data.timings){
       var h = j.data.date.hijri, t = {};
       for (var i = 0; i < ORDER.length; i++) t[ORDER[i]] = String(j.data.timings[ORDER[i]]).substr(0, 5);
-      P = {date: k, loc: lk, t: t, hijri: ar(parseInt(h.day, 10)) + ' ' + h.month.ar + ' ' + ar(h.year) + ' هـ'};
+      P = {date: k, loc: lk, t: t, hijri: ar(parseInt(h.day, 10)) + ' ' + h.month.ar.replace(/[\u064B-\u065F]/g, '') + ' ' + ar(h.year) + ' هـ'};
       sset('p', P);
     } else if (cached && cached.loc === lk){
       P = cached;
@@ -291,7 +321,8 @@ function loadPrayers(){
 
 function wxText(c){
   if (c === 0) return 'صحو';
-  if (c <= 3) return 'غائم جزئياً';
+  if (c <= 2) return 'غائم جزئياً';
+  if (c === 3) return 'غائم';
   if (c === 45 || c === 48) return 'ضباب';
   if (c >= 51 && c <= 57) return 'رذاذ';
   if (c >= 61 && c <= 67) return 'أمطار';
@@ -300,17 +331,18 @@ function wxText(c){
   if (c >= 95) return 'عواصف رعدية';
   return '';
 }
+function deg(v){ return '<span dir="ltr">' + ar(Math.round(v)) + '°</span>'; }
 function renderWx(w){
   if (!w || !w.daily) return;
-  var html = '', d = new Date();
-  for (var i = 0; i < 3 && i < w.daily.time.length; i++){
-    var label = i === 0 ? 'اليوم' : DAYS[(d.getDay() + i) % 7];
-    var temp = i === 0 && w.current ? Math.round(w.current.temperature_2m) : Math.round(w.daily.temperature_2m_max[i]);
-    var code = i === 0 && w.current ? w.current.weather_code : w.daily.weather_code[i];
-    html += '<div class="day"><span class="t" dir="ltr">' + ar(temp) + '°</span><span class="n">' + label + '</span>' +
-            '<span class="d">' + wxText(code) + '</span><span class="d" dir="ltr">' + ar(Math.round(w.daily.temperature_2m_max[i])) + '° / ' + ar(Math.round(w.daily.temperature_2m_min[i])) + '°</span></div>';
+  var d = new Date(), now = w.current ? w.current.temperature_2m : w.daily.temperature_2m_max[0];
+  var code = w.current ? w.current.weather_code : w.daily.weather_code[0];
+  $('wxNow').innerHTML = deg(now) + ' <b class="gold">' + wxText(code) + '</b>';
+  $('wxSub').innerHTML = city()[0] + ' · ' + deg(w.daily.temperature_2m_max[0]) + ' / ' + deg(w.daily.temperature_2m_min[0]);
+  var html = '';
+  for (var i = 1; i < 3 && i < w.daily.time.length; i++){
+    html += '<span><span class="muted">' + DAYS[(d.getDay() + i) % 7] + '</span> ' + deg(w.daily.temperature_2m_max[i]) + '</span>';
   }
-  $('wx').innerHTML = html;
+  $('wxDays').innerHTML = html;
 }
 function loadWeather(){
   var c = city(), cached = sget('w'), lk = lkey();
@@ -321,44 +353,87 @@ function loadWeather(){
 }
 
 function loadVerse(){
-  var day = Math.floor(Date.now() / 86400000), cached = sget('v');
+  var day = Math.floor(Date.now() / 86400000), cached = sget('v2');
   if (cached && cached.day === day){ showVerse(cached); return; }
   var n = ((day * 7919) % 6236) + 1, tries = 0;
   function attempt(){
     get('https://api.alquran.cloud/v1/ayah/' + n + '/quran-simple', function(j){
       if (j && j.data && j.data.text){
-        if (j.data.text.length > 170 && tries < 6){ tries++; n = n % 6236 + 1; attempt(); return; }
-        var v = {day: day, text: j.data.text, src: String(j.data.surah.name).replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/g, '') + ' · ' + ar(j.data.numberInSurah)};
-        sset('v', v); showVerse(v);
+        if (j.data.text.length > 115 && tries < 12){ tries++; n = n % 6236 + 1; attempt(); return; }
+        var v = {day: day, text: j.data.text,
+                 src: String(j.data.surah.name).replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/g, '') + ' · الآية ' + ar(j.data.numberInSurah)};
+        sset('v2', v); showVerse(v);
       } else if (cached){ showVerse(cached); }
     });
   }
   attempt();
 }
-function showVerse(v){ $('verse').innerHTML = '﴿' + v.text + '﴾<span id="verseSrc">' + v.src + '</span>'; }
+function showVerse(v){ $('verse').innerHTML = '﴿' + v.text + '﴾'; $('verseSrc').innerHTML = v.src; $('card').style.display = 'block'; }
 
-function drift(){
-  var x = Math.round((Math.random() - .5) * 20) / 10, y = Math.round((Math.random() - .5) * 20) / 10;
-  var t = 'translate(' + x + 'vw,' + y + 'vh)';
-  $('wrap').style.webkitTransform = t; $('wrap').style.transform = t;
+function buildBg(){
+  var i;
+  if (CFG.photos && CFG.photos.length){
+    for (i = 0; i < CFG.photos.length; i++) BG.push({photo: CFG.photos[i], name: 'صورة ' + ar(i + 1) + ' من ' + ar(CFG.photos.length), tag: 'صوري'});
+  }
+  if (!BG.length || CFG.mix){
+    for (i = 0; i < CFG.scenes.length; i++) BG.push({scene: CFG.scenes[i][3], name: CFG.scenes[i][0] + ' · ' + CFG.scenes[i][1], tag: CFG.scenes[i][2]});
+  }
+  var saved = sget('bg');
+  bgIdx = (saved !== null && saved < BG.length) ? saved : 0;
+}
+function setBg(i){
+  bgIdx = ((i % BG.length) + BG.length) % BG.length;
+  lastSwitch = Date.now();
+  sset('bg', bgIdx);
+  if (bgIdx === bgShown) return;
+  bgShown = bgIdx;
+  var b = BG[bgIdx], show = layerA ? $('lA') : $('lB'), hide = layerA ? $('lB') : $('lA');
+  if (b.photo){ show.innerHTML = ''; show.style.backgroundImage = 'url("' + b.photo + '")'; }
+  else { show.style.backgroundImage = 'none'; show.innerHTML = b.scene; }
+  show.className = 'layer on'; hide.className = 'layer';
+  layerA = !layerA;
+  $('placeTag').innerHTML = b.tag;
+  $('placeName').innerHTML = b.name;
 }
 
-function showScene(){
-  var n = CFG.scenes.length, idx = Math.floor(Date.now() / (20 * 60000)) % n;
-  if (idx === curScene) return;
-  curScene = idx;
-  var s = CFG.scenes[idx], show = layerA ? $('sA') : $('sB'), hide = layerA ? $('sB') : $('sA');
-  show.innerHTML = s[3];
-  show.className = 'scene on'; hide.className = 'scene';
-  layerA = !layerA;
-  $('place').innerHTML = s[0] + ' · ' + s[1] + '<span>' + s[2] + '</span>';
+/* منع توفير الطاقة وشاشة التوقف طالما التطبيق مفتوح */
+var lunaRefs = [];
+function luna(uri, params, cb){
+  try {
+    var b = new PalmServiceBridge();
+    b.onservicecallback = function(m){ try { if (cb) cb(JSON.parse(m)); } catch(e){} };
+    b.call(uri, JSON.stringify(params));
+    lunaRefs.push(b); if (lunaRefs.length > 20) lunaRefs.shift();
+    return b;
+  } catch(e){ return null; }
+}
+var lgSaverHooked = false;
+function keepAwake(){
+  try { if (window.webapis && webapis.appcommon) webapis.appcommon.setScreenSaver(webapis.appcommon.AppCommonScreenSaverState.SCREEN_SAVER_OFF); } catch(e){}
+  try { if (window.tizen && tizen.power) tizen.power.request('SCREEN', 'SCREEN_NORMAL'); } catch(e){}
+  if (window.PalmServiceBridge && !lgSaverHooked){
+    lgSaverHooked = true;
+    luna('luna://com.webos.service.tvpower/power/registerScreenSaverRequest', {subscribe: true, clientName: 'sa.shashati.app'}, function(r){
+      if (r && r.timestamp !== undefined){
+        luna('luna://com.webos.service.tvpower/power/responseScreenSaverRequest', {clientName: 'sa.shashati.app', ack: false, timestamp: r.timestamp});
+      }
+    });
+  }
+  var v = $('keep');
+  if (CFG.keep && v){
+    if (!v.src) v.src = CFG.keep;
+    try { var pr = v.play(); if (pr && pr['catch']) pr['catch'](function(){}); } catch(e){}
+  }
+}
+
+function drift(){
+  var x = Math.round((Math.random() - .5) * 12) / 10, y = Math.round((Math.random() - .5) * 12) / 10;
+  var t = 'translate(' + x + 'vw,' + y + 'vh)';
+  $('ui').style.webkitTransform = t; $('ui').style.transform = t;
 }
 
 function pickItems(){ return pickMode === 'country' ? CFG.countries : CFG.countries[pickCountry][3]; }
-function openPicker(){
-  picking = true; pickMode = 'country'; sel = loc[0]; renderPicker();
-  $('picker').style.display = 'block';
-}
+function openPicker(){ picking = true; pickMode = 'country'; sel = loc[0]; renderPicker(); $('picker').style.display = 'block'; }
 function renderPicker(){
   var items = pickItems(), html = '';
   for (var i = 0; i < items.length; i++) html += '<div id="c' + i + '">' + items[i][0] + '</div>';
@@ -379,7 +454,8 @@ function choose(){
     if (CFG.countries[pickCountry][3].length > 1){ renderPicker(); return; }
   }
   loc = [pickCountry, sel]; sset('loc', loc); closePicker();
-  P = null; $('prayers').innerHTML = ''; $('countdown').innerHTML = ''; $('wx').innerHTML = '';
+  P = null; $('times').innerHTML = ''; $('nextName').innerHTML = '&nbsp;'; $('nextLeft').innerHTML = '';
+  $('wxNow').innerHTML = '&nbsp;'; $('wxSub').innerHTML = ''; $('wxDays').innerHTML = '';
   loadPrayers(); loadWeather(); tick();
 }
 function exitApp(){
@@ -397,21 +473,95 @@ document.addEventListener('keydown', function(e){
     else if (back){ if (pickMode === 'city'){ pickMode = 'country'; sel = pickCountry; renderPicker(); } else closePicker(); }
     e.preventDefault(); return;
   }
-  if (k === 13){ openPicker(); e.preventDefault(); }
+  if (k === 39 || k === 40){ setBg(bgIdx + 1); e.preventDefault(); }
+  else if (k === 37 || k === 38){ setBg(bgIdx - 1); e.preventDefault(); }
+  else if (k === 13){ openPicker(); e.preventDefault(); }
   else if (back && k !== 8){ exitApp(); e.preventDefault(); }
 });
 
 $('stars').innerHTML = CFG.stars;
-tick(); loadPrayers(); loadWeather(); loadVerse(); drift();
+buildBg(); setBg(bgIdx);
+tick(); loadPrayers(); loadWeather(); loadVerse(); drift(); keepAwake();
+setInterval(keepAwake, 5 * 60000);
 setInterval(tick, 10000);
 setInterval(loadWeather, 30 * 60000);
 setInterval(loadVerse, 60 * 60000);
-setInterval(drift, 90000);
+setInterval(drift, 120000);
 setTimeout(function(){ $('hint').style.opacity = '0'; }, 12000);
 </script>
 </body>
 </html>
 """
+
+
+FONT_SOURCES = {
+    # الاسم في الصفحة: (ملف التخزين، الوزن، الروابط)
+    "ShUI-400": ("plex-ar-400.woff2", "ShUI", 400, [
+        "https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-arabic/files/ibm-plex-sans-arabic-arabic-400-normal.woff2",
+        "https://cdn.jsdelivr.net/fontsource/fonts/ibm-plex-sans-arabic@latest/arabic-400-normal.woff2"]),
+    "ShUI-600": ("plex-ar-600.woff2", "ShUI", 600, [
+        "https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-arabic/files/ibm-plex-sans-arabic-arabic-600-normal.woff2",
+        "https://cdn.jsdelivr.net/fontsource/fonts/ibm-plex-sans-arabic@latest/arabic-600-normal.woff2"]),
+    "ShUI-L400": ("plex-la-400.woff2", "ShUI", 400, [
+        "https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-arabic/files/ibm-plex-sans-arabic-latin-400-normal.woff2",
+        "https://cdn.jsdelivr.net/fontsource/fonts/ibm-plex-sans-arabic@latest/latin-400-normal.woff2"]),
+    "ShQ-400": ("amiri-ar-400.woff2", "ShQ", 400, [
+        "https://cdn.jsdelivr.net/npm/@fontsource/amiri/files/amiri-arabic-400-normal.woff2",
+        "https://cdn.jsdelivr.net/fontsource/fonts/amiri@latest/arabic-400-normal.woff2"]),
+}
+FONT_DIR = os.path.join(os.path.expanduser("~"), ".tv_manager_fonts")
+
+
+def ensure_fonts(log=None):
+    """يحمّل الخطوط مرة وحدة من الإنترنت ويخزنها على الكمبيوتر (الشاشة ما تحتاج إنترنت للخط)."""
+    import urllib.request
+    os.makedirs(FONT_DIR, exist_ok=True)
+    got = {}
+    for key, (fname, family, weight, urls) in FONT_SOURCES.items():
+        path = os.path.join(FONT_DIR, fname)
+        if not os.path.isfile(path) or os.path.getsize(path) < 2000:
+            for u in urls:
+                try:
+                    req = urllib.request.Request(u, headers={"User-Agent": "TVManager/1.0"})
+                    with urllib.request.urlopen(req, timeout=20) as r:
+                        data = r.read()
+                    if len(data) > 2000 and data[:4] == b"wOF2":
+                        with open(path, "wb") as f:
+                            f.write(data)
+                        break
+                except Exception:
+                    continue
+        if os.path.isfile(path) and os.path.getsize(path) > 2000:
+            got[key] = path
+        elif log is not None:
+            log.append("ما قدرت أحمّل الخط %s، بيستخدم خط الشاشة بداله." % family)
+    return got
+
+
+def font_css(log=None):
+    import base64
+    css = []
+    for key, path in ensure_fonts(log).items():
+        _, family, weight, _ = FONT_SOURCES[key]
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        css.append("@font-face{font-family:'%s';font-weight:%d;font-style:normal;font-display:block;"
+                   "src:url(data:font/woff2;base64,%s) format('woff2')}" % (family, weight, b64))
+    return "\n".join(css)
+
+
+KEEP_MP4_B64 = "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"
+
+
+PHOTO_DIR = os.path.join(os.path.expanduser("~"), ".tv_manager_photos")
+
+
+def photo_names():
+    try:
+        names = [n for n in os.listdir(PHOTO_DIR) if n.lower().endswith(".jpg")]
+    except OSError:
+        return []
+    return sorted(names, key=lambda n: (len(n), n))
 
 
 def _loc(country=0, city=0):
@@ -423,16 +573,27 @@ def _loc(country=0, city=0):
     return [country, city]
 
 
-def page(country=0, city=0):
+def page(country=0, city=0, photo_base="photos/", photo_suffix="", log=None, keep_src="keep.mp4"):
     cfg = {
         "loc": _loc(country, city),
         "countries": COUNTRIES,
         "scenes": tv_scenes.build(),
         "stars": ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">'
                   + tv_scenes.stars() + '</svg>'),
+        "photos": [photo_base + n + photo_suffix for n in photo_names()],
+        "mix": False,
+        "keep": keep_src,
     }
     data = json.dumps(cfg, ensure_ascii=False).replace("</", "<\\/")
-    return PAGE_TEMPLATE.replace("__CONFIG__", data)
+    return PAGE_TEMPLATE.replace("__FONTS__", font_css(log)).replace("__CONFIG__", data)
+
+
+def _photo_files():
+    out = {}
+    for n in photo_names():
+        with open(os.path.join(PHOTO_DIR, n), "rb") as f:
+            out["photos/" + n] = f.read()
+    return out
 
 
 # ---------------------------------------------------------------- الأيقونة (PNG بدون مكتبات)
@@ -488,7 +649,7 @@ def _ar(members):
     return bytes(out)
 
 
-def lg_ipk(country=0, city=0):
+def lg_ipk(country=0, city=0, log=None):
     appinfo = {
         "id": LG_APP_ID, "version": APP_VERSION, "vendor": "Shashati", "type": "web",
         "main": "index.html", "title": "شاشتي", "icon": "icon.png", "largeIcon": "largeIcon.png",
@@ -498,12 +659,16 @@ def lg_ipk(country=0, city=0):
                "package_format_version": 2, "vendor": "Shashati", "version": APP_VERSION}
     files = {
         "appinfo.json": json.dumps(appinfo, ensure_ascii=False, indent=1).encode("utf-8"),
-        "index.html": page(country, city).encode("utf-8"),
+        "index.html": page(country, city, log=log).encode("utf-8"),
         "icon.png": png_icon(80),
         "largeIcon.png": png_icon(130),
     }
+    files.update(_photo_files())
+    files["keep.mp4"] = base64.b64decode(KEEP_MP4_B64)
     base = "./usr/palm/applications/" + LG_APP_ID
     entries = [("./usr", None), ("./usr/palm", None), ("./usr/palm/applications", None), (base, None)]
+    if any(n.startswith("photos/") for n in files):
+        entries.append((base + "/photos", None))
     entries += [(base + "/" + n, d) for n, d in files.items()]
     entries += [("./usr/palm/packages", None), ("./usr/palm/packages/" + LG_APP_ID, None),
                 ("./usr/palm/packages/" + LG_APP_ID + "/packageinfo.json",
@@ -530,18 +695,22 @@ TIZEN_CONFIG = """<?xml version="1.0" encoding="UTF-8"?>
     <name>شاشتي</name>
     <tizen:profile name="tv-samsung"/>
     <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://tizen.org/privilege/power"/>
     <access origin="*" subdomains="true"/>
     <tizen:setting screen-orientation="landscape" context-menu="disable" background-support="disable" encryption="disable" install-location="auto" hwkey-event="enable"/>
 </widget>
 """ % (APP_VERSION, TIZEN_APP_ID, TIZEN_PKG_ID)
 
 
-def tizen_files(country=0, city=0):
-    return {
+def tizen_files(country=0, city=0, log=None):
+    files = {
         "config.xml": TIZEN_CONFIG.encode("utf-8"),
-        "index.html": page(country, city).encode("utf-8"),
+        "index.html": page(country, city, log=log).encode("utf-8"),
         "icon.png": png_icon(117),
     }
+    files.update(_photo_files())
+    files["keep.mp4"] = base64.b64decode(KEEP_MP4_B64)
+    return files
 
 
 def tizen_unsigned_zip(country=0, city=0):

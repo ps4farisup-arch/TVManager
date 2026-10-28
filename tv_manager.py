@@ -321,7 +321,9 @@ def samsung_screen_install(ip, country, city, profile):
                            "وأنشئ شهادة Samsung من Certificate Manager (مرة وحدة)، ثم أعد تشغيل البرنامج.")
     work = tempfile.mkdtemp(prefix="shashati_")
     try:
-        for name, data in screen.tizen_files(country, city).items():
+        font_log = []
+        for name, data in screen.tizen_files(country, city, font_log).items():
+            os.makedirs(os.path.dirname(os.path.join(work, name)), exist_ok=True)
             with open(os.path.join(work, name), "wb") as f:
                 f.write(data)
         cmd = [tz, "package", "-t", "wgt"]
@@ -335,7 +337,7 @@ def samsung_screen_install(ip, country, city, profile):
         with open(os.path.join(work, wgts[0]), "rb") as f:
             data = f.read()
         ok, log = samsung_install(ip, data, "Shashati.wgt")
-        log.insert(0, "تم توقيع «شاشتي» بشهادتك.")
+        log[0:0] = font_log + ["تم توقيع «شاشتي» بشهادتك."]
         return ok, log
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -747,7 +749,18 @@ class Panel(http.server.BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(u.query)
             if q.get("k", [""])[0] != TOKEN:
                 return self._send(b"forbidden", "text/plain", 403)
-            return self._send(screen.page(int(q.get("country", ["0"])[0] or 0), int(q.get("city", ["0"])[0] or 0)).encode(), "text/html; charset=utf-8")
+            html = screen.page(int(q.get("country", ["0"])[0] or 0), int(q.get("city", ["0"])[0] or 0),
+                               photo_base="/screen-photo/", photo_suffix="?k=" + TOKEN,
+                               keep_src="data:video/mp4;base64," + screen.KEEP_MP4_B64)
+            return self._send(html.encode(), "text/html; charset=utf-8")
+        if u.path.startswith("/screen-photo/"):
+            q = urllib.parse.parse_qs(u.query)
+            name = os.path.basename(u.path)
+            path = os.path.join(screen.PHOTO_DIR, name)
+            if q.get("k", [""])[0] != TOKEN or name not in screen.photo_names():
+                return self._send(b"not found", "text/plain", 404)
+            with open(path, "rb") as f:
+                return self._send(f.read(), "image/jpeg")
         if not self._authed():
             return self._json({"error": "غير مصرح"}, 403)
         if u.path == "/api/info":
@@ -763,6 +776,8 @@ class Panel(http.server.BaseHTTPRequestHandler):
             })
         if u.path == "/api/dns":
             return self._json(DNS.status())
+        if u.path == "/api/photos":
+            return self._json({"count": len(screen.photo_names())})
         self._json({"error": "غير موجود"}, 404)
 
     def do_POST(self):
@@ -796,8 +811,10 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 ipaddress.ip_address(ip)
                 country, city = int(req.get("country", 0)), int(req.get("city", 0))
                 if req.get("brand") == "lg":
-                    ok, log = lg_install(ip, screen.lg_ipk(country, city), "Shashati.ipk",
-                                         req.get("mode", "dev"), req.get("secret", ""))
+                    font_log = []
+                    pkg = screen.lg_ipk(country, city, font_log)
+                    ok, log = lg_install(ip, pkg, "Shashati.ipk", req.get("mode", "dev"), req.get("secret", ""))
+                    log[0:0] = font_log
                 elif req.get("brand") == "samsung":
                     ok, log = samsung_screen_install(ip, country, city, req.get("profile", "").strip())
                 else:
@@ -817,6 +834,22 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if path == "/api/photos/add":
+                data = self._body(4 * 1024 * 1024)
+                if data[:3] != b"\xff\xd8\xff":
+                    raise ValueError("الملف مو صورة JPEG.")
+                names = screen.photo_names()
+                if len(names) >= 20:
+                    raise ValueError("الحد الأقصى ٢٠ صورة.")
+                os.makedirs(screen.PHOTO_DIR, exist_ok=True)
+                nums = [int(n.split(".")[0]) for n in names if n.split(".")[0].isdigit()]
+                with open(os.path.join(screen.PHOTO_DIR, "%d.jpg" % (max(nums + [0]) + 1)), "wb") as f:
+                    f.write(data)
+                return self._json({"ok": True, "count": len(screen.photo_names())})
+            if path == "/api/photos/clear":
+                for n in screen.photo_names():
+                    os.remove(os.path.join(screen.PHOTO_DIR, n))
+                return self._json({"ok": True, "count": 0})
             if path == "/api/dns/start":
                 ok = DNS.start()
                 return self._json({"ok": ok, **DNS.status()})
@@ -962,6 +995,16 @@ pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-ra
       <p><b class="brand" style="color:var(--lg)">LG:</b> ما فيها خيار رسمي لهذا. ثبّت «شاشتي» في أول شريط التطبيقات عشان توصل لها بضغطة.</p>
       <p class="muted">ملاحظة: نظاما سامسونج و LG ما يسمحان باستبدال الواجهة الرئيسية أو شاشة التوقف بتطبيق خارجي، لذلك «شاشتي» تطبيق تفتحه، مو بديل للواجهة.</p>
     </details>
+    <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--line)">
+      <h2 style="font-size:1.05rem">صورك كخلفية (اختياري)</h2>
+      <p class="muted" style="font-size:.92rem">أضف صورك أو صور تحمّلها من مواقع مجانية مثل Unsplash و Pexels. إذا أضفت صور، تظهر بدل المناظر المرسومة. البرنامج يصغّرها لمقاس الشاشة تلقائياً. بعد الإضافة اضغط «ثبّت شاشتي» مرة ثانية عشان توصل للشاشة.</p>
+      <div class="row">
+        <input type="file" id="photoFiles" accept="image/*" multiple aria-label="الصور">
+        <button class="primary" id="photoBtn" onclick="addPhotos()">أضف الصور</button>
+        <button onclick="clearPhotos()">احذف كل الصور</button>
+        <span class="muted" id="photoNote"></span>
+      </div>
+    </div>
     <div class="row" style="margin-top:.8rem">
       <button onclick="downloadScreen('lg')">حمّل ملف LG (‎.ipk)</button>
       <button onclick="downloadScreen('samsung')">حمّل ملفات سامسونج (غير موقّعة)</button>
@@ -1172,6 +1215,44 @@ async function installScreen(i) {
   log.textContent = (j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم تثبيت «شاشتي». تلقاها في قائمة التطبيقات.' : 'ما اكتمل التثبيت. شوف التفاصيل فوق.');
 }
 
+async function photoCount() {
+  const j = await api('/api/photos');
+  $('photoNote').textContent = j.count ? 'عندك ' + j.count + ' صورة.' : 'ما فيه صور، بتظهر المناظر المرسومة.';
+}
+function shrink(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 1920 / img.width, 1200 / img.height);
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      c.toBlob(b => b ? resolve(b) : reject(), 'image/jpeg', 0.84);
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+async function addPhotos() {
+  const files = [...$('photoFiles').files];
+  if (!files.length) { $('photoNote').textContent = 'اختر صورة أو أكثر أولاً.'; return; }
+  $('photoBtn').disabled = true;
+  let done = 0;
+  for (const f of files) {
+    $('photoNote').textContent = 'أجهّز الصورة ' + (done + 1) + ' من ' + files.length + '…';
+    try {
+      const blob = await shrink(f);
+      const j = await api('/api/photos/add', {method: 'POST', body: blob});
+      if (j.error) { $('photoNote').textContent = j.error; break; }
+      done++;
+    } catch (e) { $('photoNote').textContent = 'تعذّرت قراءة ' + f.name; }
+  }
+  $('photoBtn').disabled = false; $('photoFiles').value = '';
+  await photoCount();
+}
+async function clearPhotos() { await api('/api/photos/clear', {method: 'POST'}); await photoCount(); }
+
 function paintDns(j) {
   if (j.error && !('running' in j)) { $('dnsErr').innerHTML = `<div class="state bad">${esc(j.error)}</div>`; return; }
   DNSRUN = j.running;
@@ -1213,6 +1294,7 @@ async function saveLists() {
 }
 
 loadInfo().then(() => scan(false));
+photoCount();
 api('/api/dns').then(paintDns);
 setInterval(() => api('/api/dns').then(paintDns), 4000);
 </script>
