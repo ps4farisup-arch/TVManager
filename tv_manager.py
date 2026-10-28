@@ -37,6 +37,8 @@ try:
 except ImportError:
     paramiko = None
 
+import tv_screen_app as screen
+
 APP_PORT = 8765
 HOME = os.path.expanduser("~")
 CONFIG_PATH = os.path.join(HOME, ".tv_manager.json")
@@ -296,6 +298,47 @@ def samsung_install(ip, data, filename):
             os.remove(path)
         except OSError:
             pass
+
+
+def find_tizen():
+    for n in ("tizen", "tizen.bat"):
+        p = shutil.which(n)
+        if p:
+            return p
+    here = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
+    for base in (os.path.join(HOME, "tizen-studio"), r"C:\tizen-studio", here):
+        for n in ("tizen.bat", "tizen"):
+            c = os.path.join(base, "tools", "ide", "bin", n)
+            if os.path.isfile(c):
+                return c
+    return None
+
+
+def samsung_screen_install(ip, country, city, profile):
+    tz = find_tizen()
+    if not tz:
+        raise RuntimeError("سامسونج تقبل فقط تطبيقات موقّعة بشهادة خاصة بشاشتك. ثبّت Tizen Studio "
+                           "وأنشئ شهادة Samsung من Certificate Manager (مرة وحدة)، ثم أعد تشغيل البرنامج.")
+    work = tempfile.mkdtemp(prefix="shashati_")
+    try:
+        for name, data in screen.tizen_files(country, city).items():
+            with open(os.path.join(work, name), "wb") as f:
+                f.write(data)
+        cmd = [tz, "package", "-t", "wgt"]
+        if profile:
+            cmd += ["-s", profile]
+        cmd += ["--", work]
+        out = _run(cmd, 240)
+        wgts = [n for n in os.listdir(work) if n.endswith(".wgt")]
+        if not wgts:
+            raise RuntimeError("فشل توقيع التطبيق. تأكد من اسم ملف الشهادة (Profile) في Certificate Manager.\n" + out[-800:])
+        with open(os.path.join(work, wgts[0]), "rb") as f:
+            data = f.read()
+        ok, log = samsung_install(ip, data, "Shashati.wgt")
+        log.insert(0, "تم توقيع «شاشتي» بشهادتك.")
+        return ok, log
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- تثبيت على LG
@@ -598,6 +641,11 @@ class Panel(http.server.BaseHTTPRequestHandler):
                        "<h2>الرابط ناقص</h2><p>افتح الرابط الكامل الظاهر في نافذة البرنامج على الكمبيوتر.</p>")
                 return self._send(msg.encode(), "text/html; charset=utf-8", 403)
             return self._send(PAGE.encode(), "text/html; charset=utf-8")
+        if u.path == "/screen-preview":
+            q = urllib.parse.parse_qs(u.query)
+            if q.get("k", [""])[0] != TOKEN:
+                return self._send(b"forbidden", "text/plain", 403)
+            return self._send(screen.page(int(q.get("country", ["0"])[0] or 0), int(q.get("city", ["0"])[0] or 0)).encode(), "text/html; charset=utf-8")
         if not self._authed():
             return self._json({"error": "غير مصرح"}, 403)
         if u.path == "/api/info":
@@ -606,6 +654,8 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 "ip": ip,
                 "phoneUrl": "http://%s:%d/?k=%s" % (ip, APP_PORT, TOKEN),
                 "sdb": bool(find_sdb()),
+                "tizen": bool(find_tizen()),
+                "countries": [[c[0], [x[0] for x in c[3]]] for c in screen.COUNTRIES],
                 "paramiko": paramiko is not None,
                 "os": sys.platform,
             })
@@ -638,6 +688,33 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 else:
                     raise ValueError("نوع شاشة غير معروف.")
                 return self._json({"ok": ok, "log": log})
+            if path == "/api/screen/install":
+                req = json.loads(self._body() or b"{}")
+                ip = req.get("ip", "")
+                ipaddress.ip_address(ip)
+                country, city = int(req.get("country", 0)), int(req.get("city", 0))
+                if req.get("brand") == "lg":
+                    ok, log = lg_install(ip, screen.lg_ipk(country, city), "Shashati.ipk",
+                                         req.get("mode", "dev"), req.get("secret", ""))
+                elif req.get("brand") == "samsung":
+                    ok, log = samsung_screen_install(ip, country, city, req.get("profile", "").strip())
+                else:
+                    raise ValueError("نوع شاشة غير معروف.")
+                return self._json({"ok": ok, "log": log})
+            if path == "/api/screen/package":
+                req = json.loads(self._body() or b"{}")
+                country, city = int(req.get("country", 0)), int(req.get("city", 0))
+                if req.get("brand") == "lg":
+                    data, name = screen.lg_ipk(country, city), "Shashati.ipk"
+                else:
+                    data, name = screen.tizen_unsigned_zip(country, city), "Shashati-tizen-unsigned.zip"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", 'attachment; filename="%s"' % name)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if path == "/api/dns/start":
                 ok = DNS.start()
                 return self._json({"ok": ok, **DNS.status()})
@@ -742,7 +819,7 @@ pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-ra
   <div class="hero">
     <div>
       <h1>مدير الشاشات الذكية</h1>
-      <p class="muted">يكتشف شاشات سامسونج و LG المتصلة بنفس الشبكة، يحجب إعلاناتها، ويثبّت عليها تطبيقات من خارج المتجر.</p>
+      <p class="muted">يكتشف شاشات سامسونج و LG المتصلة بنفس الشبكة، يحجب إعلاناتها، يثبّت عليها تطبيقات من خارج المتجر، ويركّب عليها «شاشتي».</p>
     </div>
     <span class="pill"><span class="dot" id="dnsDot"></span><span id="dnsPill">حاجب الإعلانات متوقف</span></span>
   </div>
@@ -759,6 +836,34 @@ pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-ra
       </div>
     </div>
     <div class="tvs" id="tvs"><div class="empty muted">ما فيه شاشات بعد.</div></div>
+  </section>
+
+  <section>
+    <div class="head">
+      <div>
+        <h2>شاشتي: واجهة إسلامية بمناظر سعودية</h2>
+        <p class="muted">ساعة، تاريخ هجري، مواقيت الصلاة لكل الدول الإسلامية بطريقة حساب كل دولة، الطقس، وآية اليوم. الخلفية مناظر سعودية من التراث ورؤية ٢٠٣٠ تتبدّل كل ٢٠ دقيقة وتتلوّن مع أوقات الصلاة.</p>
+      </div>
+      <div class="row">
+        <button onclick="previewScreen()">جرّبها على الكمبيوتر</button>
+      </div>
+    </div>
+    <div class="row" style="margin-bottom:.8rem">
+      <label>الدولة <select id="screenCountry" onchange="fillCities()"></select></label>
+      <label>المدينة <select id="screenCity"></select></label>
+      <label>ملف شهادة سامسونج <input id="tzProfile" placeholder="اسم الـ Profile" style="direction:ltr;width:11rem"></label>
+    </div>
+    <p class="muted" style="font-size:.92rem">تثبّتها من زر «ثبّت شاشتي» في بطاقة كل شاشة فوق. تفتحها من قائمة التطبيقات، وتغيّر المدينة من الشاشة نفسها بزر OK.</p>
+    <details style="margin-top:.6rem">
+      <summary>عشان تفتح تلقائياً مع تشغيل الشاشة</summary>
+      <p><b class="brand" style="color:var(--sam)">سامسونج:</b> الإعدادات ← عام ← ميزات ذكية ← فعّل «تشغيل آخر تطبيق تلقائياً» (Autorun Last App)، وخلّ «شاشتي» آخر تطبيق تفتحه قبل ما تطفي.</p>
+      <p><b class="brand" style="color:var(--lg)">LG:</b> ما فيها خيار رسمي لهذا. ثبّت «شاشتي» في أول شريط التطبيقات عشان توصل لها بضغطة.</p>
+      <p class="muted">ملاحظة: نظاما سامسونج و LG ما يسمحان باستبدال الواجهة الرئيسية أو شاشة التوقف بتطبيق خارجي، لذلك «شاشتي» تطبيق تفتحه، مو بديل للواجهة.</p>
+    </details>
+    <div class="row" style="margin-top:.8rem">
+      <button onclick="downloadScreen('lg')">حمّل ملف LG (‎.ipk)</button>
+      <button onclick="downloadScreen('samsung')">حمّل ملفات سامسونج (غير موقّعة)</button>
+    </div>
   </section>
 
   <section>
@@ -842,6 +947,8 @@ async function loadInfo() {
   INFO = await api('/api/info');
   $('pcIp').textContent = INFO.ip || '—';
   $('phoneUrl').textContent = INFO.phoneUrl || '';
+  $('screenCountry').innerHTML = (INFO.countries || []).map((c, i) => `<option value="${i}">${esc(c[0])}</option>`).join('');
+  fillCities();
   try { new QRCode($('qr'), {text: INFO.phoneUrl, width: 140, height: 140}); }
   catch (e) { $('qr').style.display = 'none'; }
 }
@@ -906,6 +1013,7 @@ function render() {
           <input type="file" id="file${i}" accept="${sam ? '.wgt,.tpk' : '.ipk'}" aria-label="ملف التطبيق">
           <button class="primary" id="inst${i}" onclick="install(${i})">ثبّت التطبيق</button>
         </div>
+        <div class="row"><button id="scr${i}" onclick="installScreen(${i})">ثبّت شاشتي</button>${sam && !INFO.tizen ? '<span class="muted" style="font-size:.88rem">يحتاج Tizen Studio وشهادة سامسونج</span>' : ''}</div>
         <p class="muted" style="font-size:.88rem">${sam ? 'ملفات ‎.wgt — مثل TizenBrew (ومعه TizenTube ليوتيوب بدون إعلانات).' : 'ملفات ‎.ipk — مثل Homebrew Channel أو YouTube AdFree من مشروع webosbrew.'}</p>
         <pre class="log" id="log${i}" hidden></pre>
       </div>
@@ -929,6 +1037,37 @@ async function install(i) {
   $('inst' + i).disabled = false;
   if (j.error) { log.textContent = j.error; return; }
   log.textContent = (j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم التثبيت. تلقاه في قائمة التطبيقات بالشاشة.' : 'ما اكتمل التثبيت. شوف التفاصيل فوق.');
+}
+
+function screenCountry() { return +($('screenCountry').value || 0); }
+function screenCity() { return +($('screenCity').value || 0); }
+function fillCities() {
+  const c = (INFO.countries || [])[screenCountry()];
+  $('screenCity').innerHTML = c ? c[1].map((n, i) => `<option value="${i}">${esc(n)}</option>`).join('') : '';
+}
+function previewScreen() { window.open('/screen-preview?k=' + encodeURIComponent(K) + '&country=' + screenCountry() + '&city=' + screenCity(), '_blank'); }
+async function downloadScreen(brand) {
+  const r = await fetch('/api/screen/package', {method: 'POST', headers: {'X-Key': K}, body: JSON.stringify({brand, country: screenCountry(), city: screenCity()})});
+  if (!r.ok) return;
+  const blob = await r.blob(), a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = brand === 'lg' ? 'Shashati.ipk' : 'Shashati-tizen-unsigned.zip';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function installScreen(i) {
+  const d = DEVS[i], log = $('log' + i);
+  log.hidden = false;
+  const body = {brand: d.brand, ip: d.ip, country: screenCountry(), city: screenCity(), profile: $('tzProfile').value};
+  if (d.brand === 'lg') {
+    body.mode = $('mode' + i).value; body.secret = $('secret' + i).value.trim();
+    if (body.mode === 'dev' && !body.secret) { log.textContent = 'اكتب الـ Passphrase من تطبيق Developer Mode.'; return; }
+  }
+  $('scr' + i).disabled = true;
+  log.textContent = 'أجهّز «شاشتي» لمدينة ' + $('screenCity').selectedOptions[0].textContent + ' وأثبّتها…';
+  const j = await api('/api/screen/install', {method: 'POST', body: JSON.stringify(body)});
+  $('scr' + i).disabled = false;
+  if (j.error) { log.textContent = j.error; return; }
+  log.textContent = (j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم تثبيت «شاشتي». تلقاها في قائمة التطبيقات.' : 'ما اكتمل التثبيت. شوف التفاصيل فوق.');
 }
 
 function paintDns(j) {
