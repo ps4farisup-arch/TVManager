@@ -1137,8 +1137,10 @@ class Panel(http.server.BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(u.query)
             if q.get("k", [""])[0] != TOKEN:
                 return self._send(b"forbidden", "text/plain", 403)
-            feats = {k: q.get(k, ["1"])[0] == "1" for k in screen.FEATURES}
-            feats["reciter"] = q.get("reciter", [""])[0]
+            try:
+                feats = json.loads(q.get("f", ["{}"])[0] or "{}")
+            except ValueError:
+                feats = {}
             html = screen.page(int(q.get("country", ["0"])[0] or 0), int(q.get("city", ["0"])[0] or 0), features=feats,
                                photo_base="/screen-photo/", photo_suffix="?k=" + TOKEN,
                                keep_src="data:video/mp4;base64," + screen.KEEP_MP4_B64)
@@ -1161,6 +1163,8 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 "sdb": bool(find_sdb()),
                 "tizen": bool(find_tizen()),
                 "countries": [[c[0], [x[0] for x in c[3]]] for c in screen.COUNTRIES],
+                "leagues": [list(x) for x in screen.LEAGUES],
+                "defaultLeagues": screen.DEFAULT_LEAGUES,
                 "paramiko": paramiko is not None or _jsch_ok(),
                 "paramikoErr": PARAMIKO_ERR,
                 "os": sys.platform,
@@ -1173,6 +1177,9 @@ class Panel(http.server.BaseHTTPRequestHandler):
                                             for r in screen.quran_reciters()]})
         if u.path == "/api/photos":
             return self._json({"count": len(screen.photo_names())})
+        if u.path == "/api/photos/list":
+            return self._json({"photos": [{"name": n, "title": screen.photo_meta(n).get("name", ""),
+                                           "stock": bool(screen.photo_meta(n).get("stock"))} for n in screen.photo_names()]})
         self._json({"error": "غير موجود"}, 404)
 
     def do_POST(self):
@@ -1252,6 +1259,21 @@ class Panel(http.server.BaseHTTPRequestHandler):
                     raise ValueError("الحد الأقصى ٢٠ صورة.")
                 screen.save_photo(data)
                 return self._json({"ok": True, "count": len(screen.photo_names())})
+            if path == "/api/photos/delete":
+                req = json.loads(self._body() or b"{}")
+                name = os.path.basename(str(req.get("name", "")))
+                if name in screen.photo_names():
+                    for ext in (".jpg", ".json"):
+                        try:
+                            os.remove(os.path.join(screen.PHOTO_DIR, name[:-4] + ext))
+                        except OSError:
+                            pass
+                return self._json({"ok": True, "count": len(screen.photo_names())})
+            if path == "/api/matches/test":
+                req = json.loads(self._body() or b"{}")
+                matches, errors = screen.fetch_matches([str(x) for x in req.get("leagues", [])][:12],
+                                                       int(req.get("tz", 180)))
+                return self._json({"ok": True, "matches": matches, "errors": errors})
             if path == "/api/photos/clear":
                 screen.clear_photos()
                 return self._json({"ok": True, "count": 0})
@@ -1281,225 +1303,343 @@ PAGE = r"""<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1222">
 <title>مدير الشاشات</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#e9edf1; --panel:#ffffff; --ink:#152231; --muted:#5b6878; --line:#d3dae2;
-  --accent:#0a6e8a; --accent-ink:#ffffff; --ok:#17803d; --warn:#a85d00; --bad:#b42318;
-  --sam:#1d3fbf; --lg:#b0123f; --screen:#0f1a26; --screen-ink:#cfe8f0;
+  --bg:#0b1222; --panel:#121b2e; --panel2:#18233a; --line:#25324d; --ink:#eef1f6; --muted:#9ba7bb;
+  --gold:#d9b46a; --gold-ink:#1a1408; --gold-soft:rgba(217,180,106,.14);
+  --ok:#4fc38a; --warn:#e7b04b; --bad:#ff7b72; --sam:#8ea2ff; --lg:#ff7aa0; --and:#3ddc84; --r:18px;
+  color-scheme:dark;
 }
-@media (prefers-color-scheme:dark){:root{
-  --bg:#0c141c; --panel:#132130; --ink:#e4edf5; --muted:#93a3b4; --line:#243446;
-  --accent:#4cc3e0; --accent-ink:#04222b; --ok:#5bd38a; --warn:#f3a740; --bad:#ff7b6e;
-  --sam:#8aa2ff; --lg:#ff7aa0; --screen:#060b11; --screen-ink:#bfe4ee;
-  color-scheme:dark;}}
-*{box-sizing:border-box}
-html,body{margin:0}
-body{background:var(--bg);color:var(--ink);font:16px/1.65 "Readex Pro","Segoe UI",Tahoma,"Noto Sans Arabic",sans-serif}
-main{max-width:980px;margin:0 auto;padding:1.25rem 1rem 4rem}
-h1{font-size:1.9rem;margin:0;font-weight:700;letter-spacing:-.01em}
-h2{font-size:1.25rem;margin:0 0 .25rem;font-weight:700}
-p{margin:.25rem 0}
-.muted{color:var(--muted)}
-.hero{display:flex;gap:1.25rem;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:.5rem 0 1.5rem}
-.hero p{max-width:52ch}
-.pill{display:inline-flex;align-items:center;gap:.45rem;padding:.3rem .8rem;border-radius:999px;background:var(--panel);border:1px solid var(--line);font-size:.9rem}
-.dot{width:.6rem;height:.6rem;border-radius:50%;background:var(--muted)}
-.dot.on{background:var(--ok);box-shadow:0 0 0 4px color-mix(in srgb,var(--ok) 25%,transparent)}
-section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:1.25rem;margin-bottom:1.25rem}
-.head{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:1rem}
-button,.btn{font:inherit;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--ink);padding:.5rem 1rem;border-radius:9px}
-button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
-button:disabled{opacity:.55;cursor:wait}
-button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-input,select,textarea{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.45rem .6rem;max-width:100%}
-textarea{width:100%;min-height:7rem;direction:ltr;text-align:left;font-size:.9rem}
-.row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
+@media (prefers-color-scheme:light){:root{
+  --bg:#f3f0e9; --panel:#ffffff; --panel2:#f7f4ee; --line:#e3dccf; --ink:#1b1915; --muted:#6a6356;
+  --gold:#a07a2c; --gold-ink:#ffffff; --gold-soft:rgba(160,122,44,.12);
+  --ok:#1f8a55; --warn:#9a6200; --bad:#c0362c; --sam:#2747c7; --lg:#b0123f; --and:#1b8a4a;
+  color-scheme:light;}}
+*{box-sizing:border-box;min-width:0}
+html,body{margin:0;max-width:100%;overflow-x:hidden}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 "IBM Plex Sans Arabic","Segoe UI",Tahoma,sans-serif;-webkit-tap-highlight-color:transparent}
+.app{max-width:820px;margin:0 auto;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(100px + env(safe-area-inset-bottom,0px))}
+p{margin:0}
+svg{flex:none}
 
-/* الشاشة: إطار يشبه التلفاز مع شريط بلون الشركة */
-.tvs{display:grid;gap:1rem}
-.tv{border:1px solid var(--line);border-radius:12px;overflow:hidden;display:grid;grid-template-columns:minmax(150px,210px) 1fr}
-.tv .face{background:var(--screen);color:var(--screen-ink);padding:1rem;display:flex;flex-direction:column;justify-content:space-between;border-inline-start:6px solid var(--brand);min-height:150px}
-.tv .face b{font-size:1.15rem;color:#fff;line-height:1.3}
-.tv .face small{opacity:.8;direction:ltr;text-align:right}
-.tv .body{padding:1rem;display:grid;gap:.7rem;align-content:start}
-.tv.samsung{--brand:var(--sam)} .tv.lg{--brand:var(--lg)} .tv.android{--brand:#3ddc84} .tv.other{--brand:var(--muted)}
-.brand{font-weight:700;letter-spacing:.02em}
-.state{padding:.5rem .75rem;border-radius:8px;font-size:.92rem;border:1px solid}
-.state.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
-.state.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
-.state.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent)}
-details{font-size:.92rem} details summary{cursor:pointer;color:var(--accent)}
-details ol{margin:.4rem 0;padding-inline-start:1.3rem}
-pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-radius:8px;white-space:pre-wrap;font-size:.85rem;margin:0;max-height:240px;overflow:auto;direction:rtl}
-.empty{padding:2rem 1rem;text-align:center;border:1px dashed var(--line);border-radius:12px}
+header.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:44px;height:44px;border-radius:14px;background:var(--gold-soft);display:grid;place-items:center;color:var(--gold)}
+h1{font-size:1.3rem;margin:0;font-weight:700;line-height:1.3}
+.sub{color:var(--muted);font-size:.86rem}
 
-.stats{display:flex;gap:2rem;flex-wrap:wrap;margin:.5rem 0 1rem}
-.stat b{display:block;font-size:1.7rem;line-height:1.1}
-.feed{list-style:none;margin:0;padding:0;max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px}
-.feed li{display:flex;justify-content:space-between;gap:1rem;padding:.35rem .7rem;border-bottom:1px solid var(--line);font-size:.88rem}
+.view{display:none}
+.view.on{display:block;animation:rise .28s ease}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px;margin-bottom:14px}
+.card h2{font-size:1.06rem;margin:0 0 4px;font-weight:600}
+.card .desc{color:var(--muted);font-size:.9rem;margin-bottom:14px}
+.hero{display:grid;gap:14px}
+.hero .ic{width:52px;height:52px;border-radius:16px;background:var(--gold-soft);color:var(--gold);display:grid;place-items:center}
+
+.btn{appearance:none;-webkit-appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--ink);font:inherit;font-weight:500;
+  padding:12px 16px;border-radius:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;text-align:center}
+.btn.primary{background:var(--gold);border-color:var(--gold);color:var(--gold-ink);font-weight:600}
+.btn.block{width:100%}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--bad)}
+.btn.sm{min-height:38px;padding:7px 12px;font-size:.9rem;border-radius:11px}
+.btn:disabled{opacity:.55;cursor:progress}
+.btn:active{transform:scale(.98)}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row > .btn{flex:1 1 140px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+label.f{display:block;font-size:.84rem;color:var(--muted);margin-bottom:6px}
+input[type=text],input[type=search],select,textarea{width:100%;font:inherit;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:11px 12px;min-height:48px}
+textarea{min-height:110px;direction:ltr;text-align:left;font-size:.85rem}
+:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+
+.toggle{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:13px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.toggle:last-child{border-bottom:0;padding-bottom:2px}
+.toggle b{display:block;font-weight:500}
+.toggle span{display:block;color:var(--muted);font-size:.84rem}
+input.sw{appearance:none;-webkit-appearance:none;flex:none;width:52px;height:30px;border-radius:30px;background:var(--line);position:relative;cursor:pointer;transition:background .2s;margin:0}
+input.sw::after{content:"";position:absolute;top:3px;right:3px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .2s}
+input.sw:checked{background:var(--gold)}
+input.sw:checked::after{transform:translateX(-22px)}
+
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{appearance:none;font:inherit;font-size:.9rem;border:1px solid var(--line);background:var(--panel2);color:var(--ink);padding:8px 14px;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.chip[aria-pressed=true]{background:var(--gold-soft);border-color:var(--gold);color:var(--gold)}
+.chip.x{background:var(--gold-soft);border-color:var(--gold);color:var(--gold)}
+
+.tv{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-bottom:14px}
+.tv-head{display:flex;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line)}
+.tv-ic{width:46px;height:46px;border-radius:14px;background:var(--panel2);display:grid;place-items:center;color:var(--brand);flex:none}
+.tv-head .t{flex:1}
+.tv-head b{display:block;font-weight:600;overflow-wrap:anywhere;line-height:1.35}
+.tv-head small{color:var(--muted);display:block;font-size:.82rem}
+.tag{font-size:.75rem;padding:3px 9px;border-radius:999px;background:var(--panel2);color:var(--brand);border:1px solid var(--line);white-space:nowrap}
+.tv-body{padding:14px 16px 16px;display:grid;gap:12px}
+.tv.samsung{--brand:var(--sam)} .tv.lg{--brand:var(--lg)} .tv.android{--brand:var(--and)} .tv.other{--brand:var(--muted)}
+.pill{display:flex;align-items:flex-start;gap:10px;padding:11px 13px;border-radius:12px;font-size:.9rem;border:1px solid;line-height:1.5}
+.pill::before{content:"";width:9px;height:9px;border-radius:50%;background:currentColor;flex:none;margin-top:.45em}
+.pill.ok{color:var(--ok);border-color:rgba(79,195,138,.35);background:rgba(79,195,138,.07)}
+.pill.warn{color:var(--warn);border-color:rgba(231,176,75,.35);background:rgba(231,176,75,.07)}
+.pill.bad{color:var(--bad);border-color:rgba(255,123,114,.35);background:rgba(255,123,114,.07)}
+details.more{border:1px solid var(--line);border-radius:14px;padding:0 14px;background:var(--panel2)}
+details.more>summary{cursor:pointer;padding:13px 0;font-weight:500;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:8px}
+details.more>summary::-webkit-details-marker{display:none}
+details.more>summary::after{content:"+";color:var(--muted);font-size:1.3rem;line-height:1}
+details[open].more>summary::after{content:"−"}
+details.more .in{padding-bottom:14px;display:grid;gap:10px}
+details.more ol{margin:0;padding-inline-start:20px;color:var(--muted);font-size:.92rem;display:grid;gap:4px}
+pre.log{margin:0;background:#070b14;color:#cfe3ef;border-radius:12px;padding:12px;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:.84rem;max-height:240px;overflow:auto}
+.empty{text-align:center;padding:30px 14px;color:var(--muted)}
+.spin{width:18px;height:18px;border:2px solid currentColor;border-inline-end-color:transparent;border-radius:50%;animation:spin .8s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ltr{direction:ltr;unicode-bidi:isolate}
+
+.actionbar{position:sticky;bottom:calc(84px + env(safe-area-inset-bottom,0px));background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px;display:grid;gap:10px;box-shadow:0 12px 32px rgba(0,0,0,.28);z-index:5}
+
+.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.ph{position:relative;border-radius:14px;overflow:hidden;background:var(--panel2);aspect-ratio:16/10;margin:0}
+.ph img{width:100%;height:100%;object-fit:cover;display:block}
+.ph figcaption{position:absolute;left:0;right:0;bottom:0;padding:18px 8px 6px;font-size:.76rem;line-height:1.4;background:linear-gradient(transparent,rgba(0,0,0,.78));color:#fff}
+.ph button{position:absolute;top:6px;left:6px;width:34px;height:34px;border-radius:50%;border:0;background:rgba(0,0,0,.6);color:#fff;font-size:1.05rem;cursor:pointer}
+
+.rlist{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--panel2)}
+.rlist label{display:flex;gap:12px;align-items:center;padding:11px 13px;border-bottom:1px solid var(--line);cursor:pointer;font-size:.93rem}
+.rlist label:last-child{border-bottom:0}
+.rlist input{width:21px;height:21px;accent-color:var(--gold);flex:none;margin:0}
+.rlist small{color:var(--muted);margin-inline-start:auto;white-space:nowrap}
+
+.match{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:.92rem}
+.match:last-child{border-bottom:0}
+.match small{color:var(--muted);display:block}
+.live{color:var(--bad);font-weight:600}
+
+.dns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.dns div{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center}
+.dns b{display:block;font-size:1.15rem;direction:ltr}
+.dns small{color:var(--muted)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0}
+.stats div{background:var(--panel2);border-radius:14px;padding:12px;text-align:center}
+.stats b{display:block;font-size:1.4rem;line-height:1.2}
+.stats small{color:var(--muted);font-size:.78rem}
+.feed{list-style:none;margin:0;padding:0;max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:12px}
+.feed li{display:flex;justify-content:space-between;gap:10px;padding:7px 12px;border-bottom:1px solid var(--line);font-size:.84rem}
 .feed li span:first-child{direction:ltr;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cols{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-.steps{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-.steps ol{margin:.3rem 0;padding-inline-start:1.3rem}
-.ipbig{font-size:1.4rem;font-weight:700;direction:ltr;display:inline-block}
-.phone{display:flex;gap:1.25rem;align-items:center;flex-wrap:wrap}
-#qr{background:#fff;padding:8px;border-radius:8px;line-height:0}
-.link{direction:ltr;word-break:break-all;font-size:.9rem}
-@media (max-width:680px){
-  .tv{grid-template-columns:1fr}
-  .tv .face{min-height:auto;border-inline-start:0;border-top:6px solid var(--brand)}
-  .cols,.steps{grid-template-columns:1fr}
-  h1{font-size:1.5rem}
-}
-@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--muted);display:inline-block}
+.dot.on{background:var(--ok);box-shadow:0 0 0 4px rgba(79,195,138,.2)}
+
+nav.tabs{position:fixed;bottom:0;left:0;right:0;background:var(--panel);border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom,0px));display:flex;justify-content:center;z-index:20}
+nav.tabs .inner{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;width:100%;max-width:820px}
+.tab{appearance:none;border:0;background:transparent;color:var(--muted);font:inherit;font-size:.78rem;padding:7px 4px;border-radius:14px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer}
+.tab svg{width:24px;height:24px}
+.tab[aria-selected=true]{color:var(--gold);background:var(--gold-soft);font-weight:600}
+
+.sheet{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;justify-content:center;z-index:30}
+.sheet.on{display:flex}
+.sheet .box{background:var(--panel);border-radius:22px 22px 0 0;padding:22px;width:100%;max-width:520px;padding-bottom:calc(22px + env(safe-area-inset-bottom,0px));display:grid;gap:14px;justify-items:center;text-align:center}
+#qr{background:#fff;padding:10px;border-radius:12px;line-height:0}
+.link{direction:ltr;word-break:break-all;font-size:.85rem;color:var(--muted)}
+.toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:11px 18px;border-radius:14px;font-size:.92rem;opacity:0;transition:opacity .25s;pointer-events:none;z-index:40;max-width:92vw;text-align:center}
+.toast.on{opacity:1}
+@media (min-width:760px){.app{padding-top:28px}.photos{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}}
+@media (max-width:380px){.grid2{grid-template-columns:1fr}.stats b{font-size:1.15rem}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
-<main>
-  <div class="hero">
-    <div>
-      <h1>مدير الشاشات الذكية</h1>
-      <p class="muted">يكتشف الشاشات الذكية المتصلة بنفس الشبكة (تايزن، webOS، أندرويد وقوقل تي في)، يحجب إعلاناتها، يثبّت عليها تطبيقات من خارج المتجر، ويركّب عليها «شاشتي».</p>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <div class="logo"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+      <div><h1>مدير الشاشات</h1><p class="sub" id="topSub">يتعرّف على شاشاتك ويجهّز «شاشتي»</p></div>
     </div>
-    <span class="pill"><span class="dot" id="dnsDot"></span><span id="dnsPill">حاجب الإعلانات متوقف</span></span>
+    <button class="btn ghost sm pc-only" onclick="openSheet()" aria-label="افتح اللوحة من الجوال">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/></svg>الجوال
+    </button>
+  </header>
+
+  <!-- الشاشات -->
+  <section class="view on" id="v-tvs" role="tabpanel">
+    <div class="card hero">
+      <div class="row" style="align-items:center;flex-wrap:nowrap">
+        <div class="ic"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M2 9a14.5 14.5 0 0 1 20 0"/><circle cx="12" cy="19.5" r="1"/></svg></div>
+        <div style="flex:1"><h2>الشاشات في شبكتك</h2><p class="sub" id="scanNote">تأكد إن الشاشة شغّالة ومتصلة بنفس الواي فاي.</p></div>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="scanBtn" onclick="scan(false)">ابحث عن الشاشات</button>
+        <button class="btn" id="deepBtn" onclick="scan(true)">بحث أعمق</button>
+      </div>
+    </div>
+    <div id="tvs"></div>
+  </section>
+
+  <!-- شاشتي -->
+  <section class="view" id="v-screen" role="tabpanel">
+    <div class="card">
+      <h2>الموقع</h2>
+      <p class="desc">لمواقيت الصلاة والطقس. وتقدر تغيّره من الشاشة نفسها.</p>
+      <div class="grid2">
+        <div><label class="f" for="screenCountry">الدولة</label><select id="screenCountry" onchange="fillCities(); saveFeats()"></select></div>
+        <div><label class="f" for="screenCity">المدينة</label><select id="screenCity" onchange="saveFeats()"></select></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>وش يظهر على الشاشة</h2>
+      <p class="desc">الساعة والتاريخ الهجري ومواقيت الصلاة تظهر دائماً.</p>
+      <label class="toggle"><div><b>آيات قرآنية</b><span>تتبدّل كل ٥ دقائق</span></div><input type="checkbox" class="sw" id="fVerses" checked onchange="saveFeats()"></label>
+      <label class="toggle"><div><b>أحاديث صحيح البخاري</b><span>بالتناوب مع الآيات، مع رقم الحديث</span></div><input type="checkbox" class="sw" id="fHadith" checked onchange="saveFeats()"></label>
+      <label class="toggle"><div><b>الطقس</b><span>اليوم واليومين الجايين</span></div><input type="checkbox" class="sw" id="fWeather" checked onchange="saveFeats()"></label>
+      <label class="toggle"><div><b>مباريات اليوم</b><span>نتائج مباشرة للدوريات اللي تختارها</span></div><input type="checkbox" class="sw" id="fMatches" checked onchange="saveFeats()"></label>
+      <label class="toggle"><div><b>تلاوة القرآن الكريم</b><span>تشغيل وإيقاف من ريموت الشاشة</span></div><input type="checkbox" class="sw" id="fQuran" checked onchange="saveFeats()"></label>
+    </div>
+
+    <div class="card" id="leaguesCard">
+      <h2>الدوريات</h2>
+      <p class="desc">اضغط لاختيار الدوريات. تقدر بعدها تخفي أي دوري من إعدادات الشاشة.</p>
+      <div class="chips" id="leagueChips"></div>
+      <button class="btn block" id="testBtn" onclick="testMatches()" style="margin-top:14px">تأكد من مباريات اليوم</button>
+      <div id="testOut" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="recCard">
+      <h2>القرّاء</h2>
+      <p class="desc">اختر حتى ٦ قرّاء، وتبدّل بينهم من قائمة الشاشة. التلاوة تُشغَّل من mp3quran.net وتحتاج إنترنت.</p>
+      <div class="chips" id="recChosen"></div>
+      <input type="search" id="recSearch" placeholder="ابحث باسم القارئ" oninput="renderReciters()" style="margin:12px 0" aria-label="ابحث عن قارئ">
+      <div class="rlist" id="recList"><div class="empty">جارٍ تحميل القرّاء…</div></div>
+    </div>
+
+    <div class="card pc-only">
+      <details class="more"><summary>شاشات سامسونج (Tizen)</summary><div class="in">
+        <label class="f" for="tzProfile">اسم ملف الشهادة (Profile) من Certificate Manager</label>
+        <input type="text" id="tzProfile" class="ltr" autocomplete="off" placeholder="مثال: MyTV">
+        <p class="sub">سامسونج تقبل فقط تطبيقات موقّعة بشهادتك، ويحتاج Tizen Studio على هذا الكمبيوتر.</p>
+      </div></details>
+    </div>
+    <div class="card">
+      <details class="more"><summary>تفتح تلقائياً مع تشغيل الشاشة</summary><div class="in">
+        <p class="sub"><b>سامسونج:</b> الإعدادات ← عام ← ميزات ذكية ← فعّل «تشغيل آخر تطبيق تلقائياً»، وخلّ «شاشتي» آخر تطبيق قبل ما تطفي.</p>
+        <p class="sub"><b>LG وwebOS:</b> ثبّت «شاشتي» أول شريط التطبيقات عشان توصل لها بضغطة.</p>
+      </div></details>
+    </div>
+
+    <div class="actionbar">
+      <select id="targetTv" aria-label="اختر الشاشة"></select>
+      <div class="grid2">
+        <button class="btn" onclick="previewScreen()">معاينة</button>
+        <button class="btn primary" id="installBtn" onclick="installFromScreen()">ثبّت شاشتي</button>
+      </div>
+      <pre class="log" id="screenLog" hidden></pre>
+    </div>
+    <div class="row pc-only" style="margin-top:14px">
+      <button class="btn ghost sm" onclick="downloadScreen('lg')">ملف webOS ‎(.ipk)</button>
+      <button class="btn ghost sm" onclick="downloadScreen('samsung')">ملفات تايزن (غير موقّعة)</button>
+    </div>
+  </section>
+
+  <!-- الخلفيات -->
+  <section class="view" id="v-photos" role="tabpanel">
+    <div class="card">
+      <h2>خلفيات الشاشة</h2>
+      <p class="desc">صور حقيقية لمكة المكرمة والمدينة المنورة والتراث ورؤية ٢٠٣٠ من ويكيميديا كومنز (مرخّصة، واسم المصوّر يظهر على الشاشة)، أو صورك الخاصة. وتقدر تخفي أي صورة من إعدادات الشاشة نفسها.</p>
+      <div class="grid2">
+        <button class="btn primary" id="stockBtn" onclick="stockPhotos()">حمّل صوراً جاهزة</button>
+        <label class="btn" for="photoFiles" id="photoBtn" tabindex="0" onkeydown="if(event.key==='Enter')$('photoFiles').click()">أضف صورك</label>
+      </div>
+      <input type="file" id="photoFiles" accept="image/*" multiple hidden onchange="addPhotos()">
+      <p class="sub" id="photoNote" style="margin-top:12px"></p>
+    </div>
+    <div class="photos" id="photoGrid"></div>
+    <button class="btn block ghost danger" onclick="clearPhotos()">احذف كل الصور</button>
+  </section>
+
+  <!-- الإعلانات -->
+  <section class="view" id="v-ads" role="tabpanel">
+    <div class="card">
+      <h2>منع الإعلانات بشكل دائم</h2>
+      <p class="desc">أسهل طريقة وتشتغل بدون كمبيوتر ولا جوال: غيّر خادم DNS في الشاشة إلى خادم AdGuard المجاني.</p>
+      <div class="dns">
+        <div><small>الأساسي</small><b>94.140.14.14</b><button class="btn sm ghost" onclick="copy('94.140.14.14')">نسخ</button></div>
+        <div><small>الثانوي</small><b>94.140.15.15</b><button class="btn sm ghost" onclick="copy('94.140.15.15')">نسخ</button></div>
+      </div>
+      <div style="display:grid;gap:10px">
+        <details class="more"><summary>سامسونج</summary><div class="in"><ol>
+          <li>الإعدادات ← عام ← الشبكة ← حالة الشبكة ← إعدادات IP.</li>
+          <li>إعداد DNS ← إدخال يدوي، واكتب الرقم الأساسي واحفظ.</li>
+          <li>الإعدادات ← الدعم ← الشروط والخصوصية: ألغِ الموافقة على الإعلانات المخصّصة.</li></ol></div></details>
+        <details class="more"><summary>LG وشاشات webOS</summary><div class="in"><ol>
+          <li>الإعدادات ← عام ← الشبكة ← اختر الاتصال ← الإعدادات المتقدمة ← تعديل.</li>
+          <li>ألغِ «تلقائي» عند DNS، واكتب الرقمين واحفظ.</li>
+          <li>الإعدادات ← عام ← النظام ← الإعلانات: فعّل «تقييد تتبع الإعلانات».</li></ol></div></details>
+        <details class="more"><summary>أندرويد وقوقل تي في</summary><div class="in"><ol>
+          <li>الإعدادات ← الشبكة والإنترنت ← DNS الخاص.</li>
+          <li>اختر «اسم مضيف المزوّد» واكتب: <b class="ltr">dns.adguard-dns.com</b></li>
+          <li>أو من بطاقة الشاشة في تبويب «الشاشات» بضغطة زر.</li></ol></div></details>
+        <details class="more"><summary>كل أجهزة البيت (المودم)</summary><div class="in"><ol>
+          <li>ادخل صفحة إعدادات المودم (غالباً 192.168.1.1).</li>
+          <li>في إعدادات DNS حط الرقمين بدل التلقائي واحفظ.</li></ol></div></details>
+      </div>
+    </div>
+
+    <div class="card pc-only">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div><h2>فلتر الكمبيوتر</h2><p class="sub"><span class="dot" id="dnsDot"></span> <span id="dnsPill">متوقف</span></p></div>
+        <button class="btn primary" id="dnsBtn" onclick="toggleDns()" style="flex:0 0 auto">شغّل</button>
+      </div>
+      <p class="desc" style="margin-top:10px">طريقة بديلة: الكمبيوتر نفسه يصير فلتر. اكتب في DNS الشاشة: <b class="ltr" id="pcIp">…</b> — ولازم يبقى الكمبيوتر شغّال.</p>
+      <div id="dnsErr"></div>
+      <div class="stats">
+        <div><b id="sBlocked">0</b><small>إعلان محجوب</small></div>
+        <div><b id="sFwd">0</b><small>طلب سليم</small></div>
+        <div><b id="sList">0</b><small>نطاق في القائمة</small></div>
+      </div>
+      <ul class="feed" id="feed"><li><span>لا شيء بعد</span></li></ul>
+      <details class="more" style="margin-top:12px"><summary>القوائم المتقدمة</summary><div class="in">
+        <button class="btn sm" id="dlBtn" onclick="downloadList()">حدّث القائمة الموسّعة</button>
+        <p class="sub" id="extraNote"></p>
+        <label class="f" for="custom">نطاقات إضافية للحجب</label><textarea id="custom"></textarea>
+        <label class="f" for="allow">استثناءات</label><textarea id="allow"></textarea>
+        <label class="f" for="upstream">DNS للطلبات السليمة</label><input type="text" id="upstream" class="ltr">
+        <button class="btn sm" onclick="saveLists()">احفظ القوائم</button>
+      </div></details>
+    </div>
+  </section>
+</div>
+
+<nav class="tabs" aria-label="الأقسام"><div class="inner" role="tablist">
+  <button class="tab" role="tab" aria-selected="true" data-v="v-tvs" onclick="show('v-tvs')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>الشاشات</button>
+  <button class="tab" role="tab" aria-selected="false" data-v="v-screen" onclick="show('v-screen')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/><path d="M17 3v4M15 5h4"/></svg>شاشتي</button>
+  <button class="tab" role="tab" aria-selected="false" data-v="v-photos" onclick="show('v-photos')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>الخلفيات</button>
+  <button class="tab" role="tab" aria-selected="false" data-v="v-ads" onclick="show('v-ads')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>الإعلانات</button>
+</div></nav>
+
+<div class="sheet" id="sheet" onclick="if (event.target === this) closeSheet()">
+  <div class="box">
+    <h2 style="margin:0">افتح اللوحة من الجوال</h2>
+    <div id="qr"></div>
+    <p class="sub">صوّر الرمز بكاميرا الجوال وهو على نفس الشبكة، أو افتح الرابط:</p>
+    <p class="link" id="phoneUrl"></p>
+    <button class="btn block" onclick="closeSheet()">تم</button>
   </div>
-
-  <section>
-    <div class="head">
-      <div>
-        <h2>الشاشات في شبكتك</h2>
-        <p class="muted" id="scanNote">اضغط «ابحث عن الشاشات». تأكد أن الشاشة شغالة ومتصلة بنفس المودم.</p>
-      </div>
-      <div class="row">
-        <button class="primary" id="scanBtn" onclick="scan(false)">ابحث عن الشاشات</button>
-        <button id="deepBtn" onclick="scan(true)">بحث أعمق</button>
-      </div>
-    </div>
-    <div class="tvs" id="tvs"><div class="empty muted">ما فيه شاشات بعد.</div></div>
-  </section>
-
-  <section>
-    <div class="head">
-      <div>
-        <h2>شاشتي: واجهة إسلامية بمناظر سعودية</h2>
-        <p class="muted">ساعة، تاريخ هجري، مواقيت الصلاة لكل الدول الإسلامية بطريقة حساب كل دولة، الطقس، وآية اليوم. الخلفية مناظر سعودية من التراث ورؤية ٢٠٣٠ تتبدّل كل ٢٠ دقيقة وتتلوّن مع أوقات الصلاة.</p>
-      </div>
-      <div class="row">
-        <button onclick="previewScreen()">جرّبها على الكمبيوتر</button>
-      </div>
-    </div>
-    <div class="row" style="margin-bottom:.8rem">
-      <label>الدولة <select id="screenCountry" onchange="fillCities()"></select></label>
-      <label>المدينة <select id="screenCity"></select></label>
-      <label>ملف شهادة سامسونج <input id="tzProfile" placeholder="اسم الـ Profile" style="direction:ltr;width:11rem"></label>
-    </div>
-    <fieldset style="border:1px solid var(--line);border-radius:10px;padding:.6rem 1rem;margin:0 0 .8rem">
-      <legend class="muted" style="padding:0 .4rem">وش يظهر في شاشتي؟</legend>
-      <div class="row">
-        <label><input type="checkbox" id="fVerses" checked onchange="saveFeats()"> آيات قرآنية</label>
-        <label><input type="checkbox" id="fHadith" checked onchange="saveFeats()"> أحاديث صحيح البخاري</label>
-        <label><input type="checkbox" id="fMatches" checked onchange="saveFeats()"> مباريات اليوم</label>
-        <label><input type="checkbox" id="fWeather" checked onchange="saveFeats()"> الطقس</label>
-        <label><input type="checkbox" id="fQuran" checked onchange="saveFeats()"> تلاوة القرآن الكريم</label>
-      </div>
-      <div class="row" style="margin-top:.6rem">
-        <label>القارئ <select id="reciter" onchange="saveFeats()" style="max-width:30rem"><option value="">جارٍ تحميل القرّاء…</option></select></label>
-      </div>
-      <p class="muted" style="font-size:.85rem;margin:.3rem 0 0">التلاوات تُشغَّل مباشرة من موقع mp3quran.net، فتحتاج الشاشة اتصال إنترنت. على الشاشة: زر OK يفتح القائمة (تشغيل وإيقاف، اختيار السورة، متواصل أو سورة واحدة)، وزر التشغيل/الإيقاف في الريموت يشغّل ويوقف مباشرة.</p>
-      <p class="muted" style="font-size:.85rem;margin:.4rem 0 0">الساعة والتاريخ ومواقيت الصلاة تظهر دائماً. الآيات والأحاديث تتبدّل كل ٥ دقائق.</p>
-    </fieldset>
-    <p class="muted" style="font-size:.92rem">تثبّتها من زر «ثبّت شاشتي» في بطاقة كل شاشة فوق. تفتحها من قائمة التطبيقات، وتغيّر المدينة من الشاشة نفسها بزر OK.</p>
-    <details style="margin-top:.6rem">
-      <summary>عشان تفتح تلقائياً مع تشغيل الشاشة</summary>
-      <p><b class="brand" style="color:var(--sam)">سامسونج:</b> الإعدادات ← عام ← ميزات ذكية ← فعّل «تشغيل آخر تطبيق تلقائياً» (Autorun Last App)، وخلّ «شاشتي» آخر تطبيق تفتحه قبل ما تطفي.</p>
-      <p><b class="brand" style="color:var(--lg)">LG:</b> ما فيها خيار رسمي لهذا. ثبّت «شاشتي» في أول شريط التطبيقات عشان توصل لها بضغطة.</p>
-      <p class="muted">ملاحظة: نظاما سامسونج و LG ما يسمحان باستبدال الواجهة الرئيسية أو شاشة التوقف بتطبيق خارجي، لذلك «شاشتي» تطبيق تفتحه، مو بديل للواجهة.</p>
-    </details>
-    <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--line)">
-      <h2 style="font-size:1.05rem">صورك كخلفية (اختياري)</h2>
-      <p class="muted" style="font-size:.92rem">«حمّل صور سعودية جاهزة» يجيب صور حقيقية للعلا والدرعية والرياض وجدة وحافة العالم وغيرها من ويكيميديا كومنز (مرخّصة للاستخدام، واسم المصوّر يظهر أسفل الشاشة). وتقدر تضيف صورك الخاصة كمان. الصور تظهر بدل المناظر المرسومة. البرنامج يصغّرها لمقاس الشاشة تلقائياً. بعد الإضافة اضغط «ثبّت شاشتي» مرة ثانية عشان توصل للشاشة.</p>
-      <div class="row">
-        <input type="file" id="photoFiles" accept="image/*" multiple aria-label="الصور">
-        <button class="primary" id="photoBtn" onclick="addPhotos()">أضف الصور</button>
-        <button id="stockBtn" onclick="stockPhotos()">حمّل صور سعودية جاهزة</button>
-        <button onclick="clearPhotos()">احذف كل الصور</button>
-        <span class="muted" id="photoNote"></span>
-      </div>
-    </div>
-    <div class="row pc-only" style="margin-top:.8rem">
-      <button onclick="downloadScreen('lg')">حمّل ملف LG (‎.ipk)</button>
-      <button onclick="downloadScreen('samsung')">حمّل ملفات سامسونج (غير موقّعة)</button>
-    </div>
-  </section>
-
-  <section class="pc-only">
-    <div class="head">
-      <div>
-        <h2>حجب الإعلانات</h2>
-        <p class="muted">هذا الكمبيوتر يصير «فلتر» يمنع وصول الإعلانات للشاشة. لازم يبقى الكمبيوتر شغال.</p>
-      </div>
-      <div class="row">
-        <button class="primary" id="dnsBtn" onclick="toggleDns()">شغّل حاجب الإعلانات</button>
-      </div>
-    </div>
-    <div id="dnsErr"></div>
-    <div class="stats">
-      <div class="stat"><b id="sBlocked">0</b><span class="muted">طلب إعلان محجوب</span></div>
-      <div class="stat"><b id="sFwd">0</b><span class="muted">طلب سليم مرّ</span></div>
-      <div class="stat"><b id="sList">0</b><span class="muted">نطاق في القائمة</span></div>
-    </div>
-
-    <h2 style="font-size:1.05rem">اربط الشاشة بالحاجب</h2>
-    <p>في إعدادات الشبكة بالشاشة، غيّر الـ DNS إلى: <span class="ipbig" id="pcIp">…</span></p>
-    <div class="steps">
-      <div><b class="brand" style="color:var(--sam)">سامسونج</b>
-        <ol><li>الإعدادات ← عام ← الشبكة ← حالة الشبكة</li><li>إعدادات IP ← إعداد DNS ← إدخال يدوي</li><li>اكتب الرقم أعلاه واحفظ</li></ol></div>
-      <div><b class="brand" style="color:var(--lg)">LG</b>
-        <ol><li>الإعدادات ← الشبكة ← Wi‑Fi (أو سلكي)</li><li>الإعدادات المتقدمة ← تعديل ← ألغِ «تلقائي»</li><li>اكتب الرقم أعلاه في خانة DNS واحفظ</li></ol></div>
-    </div>
-    <p class="muted" style="font-size:.9rem">إذا طفّيت الكمبيوتر، رجّع الـ DNS في الشاشة إلى «تلقائي» وإلا ينقطع عنها الإنترنت. إعلانات يوتيوب ما تنحجب بهذي الطريقة لأنها تجي من نفس سيرفرات الفيديو؛ لها استخدم TizenTube (سامسونج) أو YouTube AdFree (LG) عن طريق التثبيت فوق.</p>
-
-    <h2 style="font-size:1.05rem;margin-top:1rem">آخر الإعلانات المحجوبة</h2>
-    <ul class="feed" id="feed"><li class="muted"><span>لا شيء بعد</span></li></ul>
-
-    <details style="margin-top:1rem">
-      <summary>القوائم والإعدادات المتقدمة</summary>
-      <div class="row" style="margin:.8rem 0">
-        <button id="dlBtn" onclick="downloadList()">حدّث القائمة الموسّعة من الإنترنت</button>
-        <span class="muted" id="extraNote"></span>
-      </div>
-      <div class="cols">
-        <label>نطاقات إضافية للحجب (سطر لكل نطاق)<textarea id="custom"></textarea></label>
-        <label>استثناءات — إذا تعطّلت خدمة أضف نطاقها هنا<textarea id="allow"></textarea></label>
-      </div>
-      <div class="row" style="margin-top:.6rem">
-        <label>DNS الأساسي للطلبات السليمة <input id="upstream" style="direction:ltr;width:9rem"></label>
-        <button onclick="saveLists()">احفظ القوائم</button>
-      </div>
-    </details>
-  </section>
-
-  <section class="pc-only">
-    <h2>افتح اللوحة من الجوال</h2>
-    <div class="phone">
-      <div id="qr"></div>
-      <div>
-        <p>صوّر الرمز بكاميرا الجوال، أو افتح هذا الرابط وهو متصل بنفس الشبكة:</p>
-        <p class="link" id="phoneUrl">…</p>
-        <p class="muted" style="font-size:.9rem">لا تشارك الرابط؛ فيه مفتاح يسمح بالتحكم في الشاشات.</p>
-      </div>
-    </div>
-  </section>
-</main>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 const K = new URLSearchParams(location.search).get('k');
-let INFO = {}, DEVS = [], dnsFilled = false, DNSRUN = false;
+let INFO = {}, DEVS = [], RECS = [], dnsFilled = false, DNSRUN = false;
+const ST = loadState();
 
 async function api(path, opts = {}) {
   opts.headers = Object.assign({'X-Key': K}, opts.headers || {});
@@ -1508,360 +1648,398 @@ async function api(path, opts = {}) {
     const j = await r.json();
     if (!r.ok && !j.error) j.error = 'خطأ ' + r.status;
     return j;
-  } catch (e) { return {error: 'انقطع الاتصال بالبرنامج على الكمبيوتر.'}; }
+  } catch (e) { return {error: 'انقطع الاتصال بالبرنامج.'}; }
 }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const $ = id => document.getElementById(id);
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), 2600); }
+function copy(txt) { (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast('تم النسخ: ' + txt), () => toast(txt)); }
+function show(v) {
+  document.querySelectorAll('.view').forEach(el => el.classList.toggle('on', el.id === v));
+  document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', t.dataset.v === v ? 'true' : 'false'));
+  try { localStorage.setItem('tvm_tab', v); } catch (e) {}
+  window.scrollTo(0, 0);
+  if (v === 'v-photos') loadPhotos();
+}
+function openSheet() { $('sheet').classList.add('on'); }
+function closeSheet() { $('sheet').classList.remove('on'); }
 
-async function loadInfo() {
-  INFO = await api('/api/info');
-  if (INFO.android) {
-    document.querySelectorAll('.pc-only').forEach(el => el.style.display = 'none');
-    document.body.classList.add('is-android');
-  }
-  $('pcIp').textContent = INFO.ip || '—';
-  $('phoneUrl').textContent = INFO.phoneUrl || '';
-  $('screenCountry').innerHTML = (INFO.countries || []).map((c, i) => `<option value="${i}">${esc(c[0])}</option>`).join('');
-  fillCities();
-  try { new QRCode($('qr'), {text: INFO.phoneUrl, width: 140, height: 140}); }
-  catch (e) { $('qr').style.display = 'none'; }
+/* الحالة المحفوظة */
+function loadState() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem('tvm_state') || '{}'); } catch (e) {}
+  if (!s.f) { try { const old = JSON.parse(localStorage.getItem('tvm_feats') || '{}'); s.f = old; if (old.reciter) s.reciters = [String(old.reciter)]; } catch (e) { s.f = {}; } }
+  s.reciters = s.reciters || [];
+  return s;
+}
+function saveState() { try { localStorage.setItem('tvm_state', JSON.stringify(ST)); } catch (e) {} }
+const FEAT_IDS = {verses: 'fVerses', hadith: 'fHadith', matches: 'fMatches', weather: 'fWeather', quran: 'fQuran'};
+function feats() {
+  const o = {};
+  for (const k in FEAT_IDS) o[k] = $(FEAT_IDS[k]).checked;
+  o.reciters = ST.reciters.slice();
+  o.leagues = (ST.leagues || INFO.defaultLeagues || []).slice();
+  return o;
+}
+function saveFeats() {
+  ST.f = {}; for (const k in FEAT_IDS) ST.f[k] = $(FEAT_IDS[k]).checked;
+  ST.country = $('screenCountry').value; ST.city = $('screenCity').value;
+  saveState(); syncCards();
+}
+function restoreFeats() { for (const k in FEAT_IDS) if (ST.f && k in ST.f) $(FEAT_IDS[k]).checked = !!ST.f[k]; syncCards(); }
+function syncCards() {
+  $('leaguesCard').hidden = !$('fMatches').checked;
+  $('recCard').hidden = !$('fQuran').checked;
 }
 
+/* المعلومات العامة */
+async function loadInfo() {
+  INFO = await api('/api/info');
+  if (INFO.android) document.querySelectorAll('.pc-only').forEach(el => el.style.display = 'none');
+  $('pcIp').textContent = INFO.ip || '—';
+  $('phoneUrl').textContent = INFO.phoneUrl || '';
+  try { if (!INFO.android) new QRCode($('qr'), {text: INFO.phoneUrl, width: 170, height: 170}); } catch (e) { $('qr').style.display = 'none'; }
+  $('screenCountry').innerHTML = (INFO.countries || []).map((c, i) => `<option value="${i}">${esc(c[0])}</option>`).join('');
+  if (ST.country != null && $('screenCountry').options[ST.country]) $('screenCountry').value = ST.country;
+  fillCities();
+  if (ST.city != null && $('screenCity').options[ST.city]) $('screenCity').value = ST.city;
+  renderLeagues();
+}
+function fillCities() {
+  const c = (INFO.countries || [])[+$('screenCountry').value || 0];
+  $('screenCity').innerHTML = c ? c[1].map((n, i) => `<option value="${i}">${esc(n)}</option>`).join('') : '';
+}
+function screenCountry() { return +($('screenCountry').value || 0); }
+function screenCity() { return +($('screenCity').value || 0); }
+
+/* الدوريات */
+function renderLeagues() {
+  const chosen = ST.leagues || INFO.defaultLeagues || [];
+  $('leagueChips').innerHTML = (INFO.leagues || []).map(l =>
+    `<button class="chip" aria-pressed="${chosen.includes(l[0])}" onclick="toggleLeague('${l[0]}')">${chosen.includes(l[0]) ? '✓ ' : ''}${esc(l[1])}</button>`).join('');
+}
+function toggleLeague(slug) {
+  const cur = (ST.leagues || INFO.defaultLeagues || []).slice(), i = cur.indexOf(slug);
+  if (i >= 0) cur.splice(i, 1); else cur.push(slug);
+  ST.leagues = cur; saveState(); renderLeagues(); $('testOut').innerHTML = '';
+}
+async function testMatches() {
+  const lg = feats().leagues;
+  if (!lg.length) { $('testOut').innerHTML = '<div class="pill warn">اختر دوري واحد على الأقل.</div>'; return; }
+  $('testBtn').disabled = true; $('testOut').innerHTML = '<p class="sub"><span class="spin"></span> أتحقق من مباريات اليوم…</p>';
+  const j = await api('/api/matches/test', {method: 'POST', body: JSON.stringify({leagues: lg, tz: -new Date().getTimezoneOffset()})});
+  $('testBtn').disabled = false;
+  if (j.error) { $('testOut').innerHTML = `<div class="pill bad">${esc(j.error)}</div>`; return; }
+  const m = j.matches || [];
+  let html = m.length ? `<div class="pill ok">لقيت ${m.length} مباراة اليوم، وبتظهر في الشاشة بنفس الطريقة.</div>` :
+                       '<div class="pill warn">ما فيه مباريات اليوم في الدوريات المختارة.</div>';
+  html += m.map(x => {
+    const st = x.state === 'in' ? `<span class="live">مباشر ${esc(x.clock)}</span>` : x.state === 'post' ? 'انتهت' : esc(x.local);
+    const sc = x.state === 'pre' ? '×' : `${esc(x.hs)} - ${esc(x.as)}`;
+    return `<div class="match"><div><b class="ltr">${esc(x.home)} ${sc} ${esc(x.away)}</b><small>${esc(x.league)}</small></div><div>${st}</div></div>`;
+  }).join('');
+  if ((j.errors || []).length) html += `<p class="sub" style="margin-top:8px">ما قدرت أتحقق من: ${esc(j.errors.join('، '))}</p>`;
+  $('testOut').innerHTML = html;
+}
+
+/* القرّاء */
+async function loadReciters() {
+  const j = await api('/api/quran/reciters');
+  RECS = j.reciters || [];
+  if (!RECS.length) { $('recList').innerHTML = '<div class="empty">تعذّر تحميل القرّاء — تأكد من الإنترنت.</div>'; return; }
+  ST.reciters = ST.reciters.filter(id => RECS.some(r => String(r.id) === String(id)));
+  if (!ST.reciters.length) {
+    const def = RECS.find(r => r.label.includes('العفاسي') && r.label.includes('حفص')) || RECS[0];
+    ST.reciters = [String(def.id)]; saveState();
+  }
+  renderReciters();
+}
+function renderReciters() {
+  const q = $('recSearch').value.trim();
+  const list = q ? RECS.filter(r => r.label.includes(q)) : RECS;
+  $('recChosen').innerHTML = ST.reciters.map(id => {
+    const r = RECS.find(x => String(x.id) === String(id));
+    return r ? `<button class="chip x" onclick="toggleRec('${r.id}')" aria-label="إزالة ${esc(r.label)}">${esc(r.label.split(' — ')[0])} ✕</button>` : '';
+  }).join('') || '<p class="sub">ما اخترت قارئ.</p>';
+  $('recList').innerHTML = list.slice(0, 250).map(r => {
+    const on = ST.reciters.includes(String(r.id));
+    return `<label><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleRec('${r.id}')"><span>${esc(r.label)}</span>${r.count < 114 ? `<small>${r.count} سورة</small>` : ''}</label>`;
+  }).join('') || '<div class="empty">ما فيه نتائج.</div>';
+}
+function toggleRec(id) {
+  id = String(id);
+  const i = ST.reciters.indexOf(id);
+  if (i >= 0) ST.reciters.splice(i, 1);
+  else if (ST.reciters.length >= 6) { toast('الحد الأقصى ٦ قرّاء'); renderReciters(); return; }
+  else ST.reciters.push(id);
+  saveState(); renderReciters();
+}
+
+/* الشاشات */
 async function scan(deep) {
   $('scanBtn').disabled = $('deepBtn').disabled = true;
-  $('scanNote').textContent = deep ? 'أفحص كل أجهزة الشبكة… قد يأخذ حتى دقيقة.' : 'أبحث عن الشاشات…';
+  $('scanNote').innerHTML = '<span class="spin"></span> ' + (deep ? 'أفحص كل أجهزة الشبكة… قد يأخذ دقيقة.' : 'أبحث عن الشاشات…');
   const j = await api('/api/scan', {method: 'POST', body: JSON.stringify({deep})});
   $('scanBtn').disabled = $('deepBtn').disabled = false;
   if (j.error) { $('scanNote').textContent = j.error; return; }
   DEVS = j.devices || [];
-  $('scanNote').textContent = DEVS.length
-    ? 'وجدت ' + DEVS.length + (DEVS.length === 1 ? ' شاشة.' : ' شاشات.')
-    : 'ما وجدت شاشات. تأكد أن الشاشة شغالة (مو وضع الاستعداد) وعلى نفس الشبكة، ثم جرّب «بحث أعمق».';
+  $('scanNote').textContent = DEVS.length ? 'لقيت ' + DEVS.length + (DEVS.length === 1 ? ' شاشة.' : ' شاشات.')
+    : 'ما لقيت شاشات. تأكد إنها شغّالة (مو وضع الاستعداد) وعلى نفس الشبكة، وجرّب «بحث أعمق».';
   render();
 }
-
+const TV_ICON = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
+function head(d) {
+  return `<div class="tv-head"><div class="tv-ic">${TV_ICON}</div><div class="t"><b>${esc(d.name)}</b>
+    <small><span class="ltr">${esc(d.model)}${d.model ? ' · ' : ''}${esc(d.ip)}</span></small></div><span class="tag">${esc(d.maker || '')} · ${esc(d.os)}</span></div>`;
+}
 function samsungState(d) {
-  if (!d.devMode) return `<div class="state bad">وضع المطور غير مفعّل — لازم تفعّله قبل تثبيت أي تطبيق.</div>
-    <details open><summary>طريقة التفعيل</summary><ol>
-    <li>افتح «التطبيقات» (Apps) في الشاشة.</li>
-    <li>اضغط بالريموت الأرقام <b>12345</b> (أو من لوحة الأرقام على الشاشة).</li>
-    <li>فعّل Developer Mode واكتب هذا الرقم: <b dir="ltr">${esc(INFO.ip)}</b></li>
-    <li>أطفئ الشاشة وشغّلها، ثم اضغط «ابحث عن الشاشات» مرة ثانية.</li></ol></details>`;
-  if (d.devIP && d.devIP !== INFO.ip) return `<div class="state warn">وضع المطور مفعّل لكنه مربوط بجهاز آخر (<span dir="ltr">${esc(d.devIP)}</span>). غيّره إلى <b dir="ltr">${esc(INFO.ip)}</b> بنفس طريقة 12345.</div>`;
-  return `<div class="state ok">وضع المطور مفعّل ومربوط بهذا الكمبيوتر.</div>`;
+  if (!d.devMode) return `<div class="pill bad">وضع المطور غير مفعّل — لازم تفعّله قبل التثبيت.</div>
+    <details class="more" open><summary>طريقة التفعيل</summary><div class="in"><ol>
+    <li>افتح «التطبيقات» في الشاشة واضغط بالريموت <b>12345</b>.</li>
+    <li>فعّل Developer Mode واكتب هذا الرقم: <b class="ltr">${esc(INFO.ip)}</b></li>
+    <li>أطفئ الشاشة وشغّلها، ثم ابحث عن الشاشات مرة ثانية.</li></ol></div></details>`;
+  if (d.devIP && d.devIP !== INFO.ip) return `<div class="pill warn">وضع المطور مربوط بجهاز آخر (<span class="ltr">${esc(d.devIP)}</span>). غيّره إلى <b class="ltr">${esc(INFO.ip)}</b> بطريقة 12345.</div>`;
+  return '<div class="pill ok">وضع المطور مفعّل ومربوط بهذا الجهاز.</div>';
 }
-
 function lgState(d) {
-  if (d.devMode) return `<div class="state ok">تطبيق Developer Mode شغّال في الشاشة.</div>`;
-  if (d.rooted) return `<div class="state ok">الشاشة فيها روت (Homebrew Channel) — اختر «روت» تحت.</div>`;
-  return `<div class="state warn">ما لقيت وضع المطور شغّال.</div>
-    <details open><summary>طريقة التفعيل</summary><ol>
-    <li>من متجر LG ثبّت تطبيق <b>Developer Mode</b>.</li>
-    <li>سجّل دخول بحساب مطور LG (مجاني من موقع webostv.developer.lge.com).</li>
+  if (d.devMode) return '<div class="pill ok">تطبيق Developer Mode شغّال في الشاشة.</div>';
+  if (d.rooted) return '<div class="pill ok">الشاشة فيها روت — اختر «روت» في إعدادات الاتصال.</div>';
+  return `<div class="pill warn">ما لقيت وضع المطور شغّال.</div>
+    <details class="more" open><summary>طريقة التفعيل</summary><div class="in"><ol>
+    <li>من متجر التطبيقات في الشاشة ثبّت <b>Developer Mode</b>.</li>
+    <li>سجّل دخول بحساب مطور LG (مجاني من webostv.developer.lge.com).</li>
     <li>فعّل Dev Mode Status و Key Server، والشاشة بتعيد التشغيل.</li>
-    <li>انسخ «Passphrase» الظاهرة في التطبيق إلى الخانة تحت.</li></ol>
-    <p class="muted">وضع المطور ينتهي بعد مدة؛ افتح التطبيق واضغط Extend لتمديده.</p></details>`;
+    <li>انسخ الـ Passphrase الظاهرة في التطبيق للخانة تحت.</li></ol>
+    <p class="sub">وضع المطور ينتهي بعد مدة؛ افتح التطبيق واضغط Extend لتمديده.</p></div></details>`;
 }
-
-function face(d) {
-  return `<div class="face">
-        <div><span class="brand">${esc(d.maker || '')}</span><br><b>${esc(d.name)}</b></div>
-        <small>${esc(d.model)}<br>${esc(d.ip)} · ${esc(d.os)}</small>
-      </div>`;
-}
-function cardAndroidPhone(d, i) {
-  return `<article class="tv android">
-      ${face(d)}
-      <div class="body">
-        <div class="state warn">تثبيت التطبيقات على شاشات أندرويد يتم من برنامج الكمبيوتر.</div>
-        <details open><summary>منع الإعلانات بشكل دائم على هذي الشاشة</summary><ol>
-          <li>الإعدادات ← الشبكة والإنترنت ← DNS الخاص (Private DNS).</li>
-          <li>اختر «اسم مضيف مزوّد DNS الخاص» واكتب: <b dir="ltr">dns.adguard-dns.com</b> واحفظ.</li>
-          <li>إذا ما لقيت الخيار في الشاشة، شغّل برنامج الكمبيوتر وفيه زر يفعّله بضغطة.</li></ol></details>
-      </div>
-    </article>`;
+function cardWebosTizen(d, i) {
+  const sam = d.brand === 'samsung';
+  if (sam && INFO.android) return `<article class="tv samsung">${head(d)}<div class="tv-body">${samsungState(d)}
+      <div class="pill warn">التثبيت على شاشات تايزن يحتاج أدوات سامسونج، ويتم من برنامج الكمبيوتر.</div></div></article>`;
+  const needs = sam ? (INFO.sdb ? '' : '<div class="pill warn">للتثبيت على سامسونج لازم Tizen Studio على هذا الكمبيوتر.</div>')
+    : (INFO.paramiko ? '' : (INFO.android
+        ? `<div class="pill bad">مكتبة الاتصال ما اشتغلت: <span class="ltr">${esc(INFO.paramikoErr)}</span></div>`
+        : '<div class="pill warn">للتثبيت نفّذ: <span class="ltr">pip install paramiko</span> ثم أعد تشغيل البرنامج.</div>'));
+  const lgFields = sam ? '' : `<div><label class="f" for="secret${i}">الـ Passphrase من تطبيق Developer Mode</label>
+      <input type="text" id="secret${i}" class="ltr" autocomplete="off" placeholder="مثال: DF7813" value="${esc((ST.secrets || {})[d.ip] || '')}"
+        oninput="(ST.secrets = ST.secrets || {})['${d.ip}'] = this.value.trim(); saveState()"></div>`;
+  return `<article class="tv ${d.brand}">${head(d)}<div class="tv-body">
+      ${sam ? samsungState(d) : lgState(d)}${needs}${lgFields}
+      <button class="btn primary block" id="scr${i}" onclick="installScreen(${i})">ثبّت شاشتي على هذي الشاشة</button>
+      <details class="more"><summary>تثبيت تطبيق خارجي</summary><div class="in">
+        <input type="file" id="file${i}" accept="${sam ? '.wgt,.tpk' : '.ipk'}" aria-label="ملف التطبيق">
+        <button class="btn" id="inst${i}" onclick="install(${i})">ثبّت الملف</button>
+        <p class="sub">${sam ? 'ملفات ‎.wgt مثل TizenBrew.' : 'ملفات ‎.ipk مثل Homebrew Channel أو YouTube AdFree من webosbrew.'}</p>
+      </div></details>
+      ${sam ? '' : `<details class="more"><summary>إعدادات الاتصال</summary><div class="in">
+        <label class="f" for="mode${i}">طريقة الاتصال</label>
+        <select id="mode${i}"><option value="dev">وضع المطور</option><option value="root"${d.rooted && !d.devMode ? ' selected' : ''}>روت (Homebrew)</option></select>
+        <p class="sub">في وضع الروت اكتب كلمة مرور الروت بدل الـ Passphrase.</p></div></details>`}
+      <pre class="log" id="log${i}" hidden></pre>
+    </div></article>`;
 }
 function cardAndroid(d, i) {
-  return `<article class="tv android">
-      ${face(d)}
-      <div class="body">
-        ${d.adb ? '<div class="state ok">تصحيح الأخطاء عبر الشبكة (ADB) شغّال في الشاشة.</div>'
-                : `<div class="state warn">لازم تفعّل تصحيح الأخطاء في الشاشة مرة وحدة.</div>`}
-        <details${d.adb ? '' : ' open'}><summary>طريقة التفعيل</summary><ol>
-          <li>الإعدادات ← تفضيلات الجهاز (أو النظام) ← حول ← اضغط على «إصدار نظام Android TV» أو «البنية» ٧ مرات لين يظهر «أنت الآن مطوّر».</li>
-          <li>ارجع للإعدادات ← خيارات المطوّر، وفعّل «تصحيح أخطاء USB» و«تصحيح الأخطاء عبر الشبكة» إن وجد.</li>
-          <li>في قوقل تي في الأحدث: فعّل «تصحيح الأخطاء اللاسلكي»، ثم «إقران جهاز برمز»، واكتب المنفذ والرمز الظاهرين تحت.</li>
-          <li>أول اتصال تطلع رسالة على الشاشة: اختر «السماح دائماً من هذا الكمبيوتر».</li></ol></details>
-        ${INFO.android ? '<p class="muted" style="font-size:.88rem">من الجوال يكون الاتصال على المنفذ 5555 (بدون رمز إقران).</p>' : ''}
-        <div class="row">
-          <label>منفذ الاتصال <input id="aport${i}" value="5555" style="direction:ltr;width:6rem" autocomplete="off"></label>
-          ${INFO.android ? '' : `<label>منفذ الإقران <input id="ppport${i}" placeholder="اختياري" style="direction:ltr;width:6rem" autocomplete="off"></label>
-          <label>رمز الإقران <input id="pcode${i}" placeholder="اختياري" style="direction:ltr;width:7rem" autocomplete="off"></label>
-          <button onclick="androidPair(${i})">اقترن</button>`}
-        </div>
-        <div class="row">
-          <input type="file" id="file${i}" accept=".apk" aria-label="ملف التطبيق">
-          <button class="primary" id="inst${i}" onclick="install(${i})">ثبّت التطبيق</button>
-        </div>
-        <p class="muted" style="font-size:.88rem">ملفات ‎.apk — مثل SmartTube ليوتيوب بدون إعلانات. حمّلها من مواقعها الرسمية فقط.</p>
-        <div class="row">
-          <button class="primary" onclick="androidAdblock(${i}, true)">فعّل حجب الإعلانات الدائم</button>
-          <button onclick="androidAdblock(${i}, false)">ألغِ الحجب</button>
-        </div>
-        <p class="muted" style="font-size:.88rem">يضبط «DNS الخاص» في الشاشة على خادم AdGuard المجاني (<span dir="ltr">dns.adguard-dns.com</span>)، ويشتغل دائماً بدون الكمبيوتر. وتقدر تسويه يدوياً من: الإعدادات ← الشبكة ← DNS الخاص.</p>
-        <div class="state warn">«شاشتي» لشاشات أندرويد تجي مع نسخة الأندرويد من البرنامج.</div>
-        <pre class="log" id="log${i}" hidden></pre>
+  return `<article class="tv android">${head(d)}<div class="tv-body">
+      ${d.adb ? '<div class="pill ok">تصحيح الأخطاء عبر الشبكة شغّال في الشاشة.</div>' : '<div class="pill warn">فعّل تصحيح الأخطاء في الشاشة مرة وحدة.</div>'}
+      <details class="more"${d.adb ? '' : ' open'}><summary>طريقة التفعيل</summary><div class="in"><ol>
+        <li>الإعدادات ← تفضيلات الجهاز ← حول ← اضغط «البنية» ٧ مرات.</li>
+        <li>خيارات المطوّر: فعّل «تصحيح أخطاء USB» و«تصحيح الأخطاء عبر الشبكة» إن وجد.</li>
+        <li>أول اتصال تطلع رسالة على الشاشة: اختر «السماح دائماً».</li></ol></div></details>
+      <div class="grid2">
+        <button class="btn primary" onclick="androidAdblock(${i}, true)">فعّل حجب الإعلانات</button>
+        <button class="btn" onclick="androidAdblock(${i}, false)">ألغِ الحجب</button>
       </div>
-    </article>`;
+      <details class="more"><summary>تثبيت تطبيق APK</summary><div class="in">
+        <input type="file" id="file${i}" accept=".apk" aria-label="ملف التطبيق">
+        <button class="btn" id="inst${i}" onclick="install(${i})">ثبّت الملف</button>
+        <p class="sub">مثل SmartTube ليوتيوب بدون إعلانات. حمّل الملفات من مواقعها الرسمية فقط.</p></div></details>
+      <details class="more"><summary>إعدادات الاتصال</summary><div class="in">
+        <label class="f" for="aport${i}">منفذ الاتصال</label><input type="text" id="aport${i}" class="ltr" value="5555" autocomplete="off">
+        ${INFO.android ? '<p class="sub">من الجوال يكون الاتصال على المنفذ 5555 بدون رمز إقران.</p>' : `
+        <div class="grid2"><div><label class="f" for="ppport${i}">منفذ الإقران</label><input type="text" id="ppport${i}" class="ltr" autocomplete="off"></div>
+        <div><label class="f" for="pcode${i}">رمز الإقران</label><input type="text" id="pcode${i}" class="ltr" autocomplete="off"></div></div>
+        <button class="btn sm" onclick="androidPair(${i})">اقترن</button>`}</div></details>
+      <div class="pill warn">«شاشتي» لشاشات أندرويد بتجي في تحديث قادم.</div>
+      <pre class="log" id="log${i}" hidden></pre>
+    </div></article>`;
 }
-function cardOther(d, i) {
-  return `<article class="tv other">
-      ${face(d)}
-      <div class="body">
-        <div class="state warn">نظام هذي الشاشة (${esc(d.os)}) مغلق، وما يسمح بتثبيت تطبيقات خارجية أو «شاشتي».</div>
-        <details open><summary>منع الإعلانات عليها</summary><ol>
-          <li>ادخل إعدادات الشبكة في الشاشة، ودوّر على DNS أو «إعدادات IP» واختر «يدوي».</li>
-          <li>اكتب <b dir="ltr">94.140.14.14</b> (والثاني <b dir="ltr">94.140.15.15</b>) واحفظ.</li>
-          <li>إذا ما فيه خيار DNS في الشاشة، حط نفس الرقمين في إعدادات DNS داخل المودم، ويشمل كل أجهزة البيت.</li></ol></details>
-      </div>
-    </article>`;
+function cardOther(d) {
+  return `<article class="tv other">${head(d)}<div class="tv-body">
+      <div class="pill warn">نظام هذي الشاشة (${esc(d.os)}) مغلق، وما يسمح بتثبيت تطبيقات أو «شاشتي».</div>
+      <button class="btn" onclick="show('v-ads')">طريقة منع الإعلانات عليها</button></div></article>`;
 }
-async function androidPair(i) {
-  const d = DEVS[i], log = $('log' + i); log.hidden = false;
-  const port = $('ppport' + i).value.trim(), code = $('pcode' + i).value.trim();
-  if (!port || !code) { log.textContent = 'اكتب منفذ ورمز الإقران من شاشة «إقران جهاز برمز».'; return; }
-  log.textContent = 'أقترن بالشاشة…';
-  const j = await api('/api/android/pair', {method: 'POST', body: JSON.stringify({ip: d.ip, port, code})});
-  log.textContent = j.error || ((j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم الإقران. اكتب منفذ الاتصال الظاهر في «التصحيح اللاسلكي» ثم ثبّت.' : 'ما نجح الإقران. تأكد من الرمز والمنفذ.'));
-}
-async function androidAdblock(i, enable) {
-  const d = DEVS[i], log = $('log' + i); log.hidden = false;
-  log.textContent = enable ? 'أفعّل حجب الإعلانات…' : 'ألغي الحجب…';
-  const j = await api('/api/android/adblock', {method: 'POST', body: JSON.stringify({ip: d.ip, port: $('aport' + i).value.trim(), enable})});
-  log.textContent = j.error || ((j.log || []).join('\n') + '\n\n' + (j.ok ? (enable ? 'تم. الحجب صار دائم على هذي الشاشة.' : 'تم إلغاء الحجب.') : 'ما اكتمل. شوف التفاصيل فوق.'));
-}
-
 function render() {
-  if (!DEVS.length) { $('tvs').innerHTML = '<div class="empty muted">ما فيه شاشات بعد.</div>'; return; }
-  $('tvs').innerHTML = DEVS.map((d, i) => {
-    if (d.brand === 'android') return cardAndroid(d, i);
-    if (d.brand === 'other') return cardOther(d, i);
-    const sam = d.brand === 'samsung';
-    if (sam && INFO.android) return `<article class="tv samsung">${face(d)}<div class="body">
-        ${samsungState(d)}<div class="state warn">التثبيت على شاشات تايزن (سامسونج) يحتاج أدوات سامسونج، ويتم من برنامج الكمبيوتر.</div></div></article>`;
-    const needs = sam
-      ? (INFO.sdb ? '' : '<div class="state warn">للتثبيت على سامسونج لازم Tizen Studio (أداة sdb) على هذا الكمبيوتر.</div>')
-      : (INFO.paramiko ? '' : (INFO.android
-          ? `<div class="state warn">مكتبة الاتصال بالشاشة ما اشتغلت في التطبيق. أرسل هذي الرسالة للمطوّر: <span dir="ltr">${esc(INFO.paramikoErr)}</span></div>`
-          : '<div class="state warn">للتثبيت على LG نفّذ على الكمبيوتر: <span dir="ltr">pip install paramiko</span> ثم أعد تشغيل البرنامج.</div>'));
-    const lgFields = sam ? '' : `<div class="row">
-        <select id="mode${i}" aria-label="طريقة الاتصال"><option value="dev">وضع المطور</option><option value="root"${d.rooted && !d.devMode ? ' selected' : ''}>روت</option></select>
-        <input id="secret${i}" placeholder="Passphrase أو كلمة مرور الروت" style="direction:ltr" autocomplete="off">
-      </div>`;
-    return `<article class="tv ${d.brand}">
-      ${face(d)}
-      <div class="body">
-        ${sam ? samsungState(d) : lgState(d)}
-        ${needs}
-        ${lgFields}
-        <div class="row">
-          <input type="file" id="file${i}" accept="${sam ? '.wgt,.tpk' : '.ipk'}" aria-label="ملف التطبيق">
-          <button class="primary" id="inst${i}" onclick="install(${i})">ثبّت التطبيق</button>
-        </div>
-        <div class="row"><button id="scr${i}" onclick="installScreen(${i})">ثبّت شاشتي</button>${sam && !INFO.tizen ? '<span class="muted" style="font-size:.88rem">يحتاج Tizen Studio وشهادة سامسونج</span>' : ''}</div>
-        <p class="muted" style="font-size:.88rem">${sam ? 'ملفات ‎.wgt — مثل TizenBrew (ومعه TizenTube ليوتيوب بدون إعلانات).' : 'ملفات ‎.ipk — مثل Homebrew Channel أو YouTube AdFree من مشروع webosbrew.'}</p>
-        <details>
-          <summary>منع الإعلانات بشكل دائم على هذي الشاشة (بدون الكمبيوتر)</summary>
-          <ol>
-            ${sam
-              ? '<li>الإعدادات ← عام ← الشبكة ← حالة الشبكة ← إعدادات IP.</li><li>إعداد DNS ← إدخال يدوي.</li>'
-              : '<li>الإعدادات ← عام ← الشبكة ← اختر Wi‑Fi أو السلكي ← الإعدادات المتقدمة ← تعديل.</li><li>ألغِ «تلقائي» عند DNS.</li>'}
-            <li>اكتب خادم DNS: <b dir="ltr">94.140.14.14</b> (وإذا فيه خانة ثانية: <b dir="ltr">94.140.15.15</b>) واحفظ. هذا خادم AdGuard المجاني لحجب الإعلانات، يشتغل دائماً حتى لو الكمبيوتر مطفي.</li>
-            ${sam
-              ? '<li>الإعدادات ← الدعم ← الشروط والخصوصية: ألغِ الموافقة على خدمات الإعلانات المخصّصة ومعلومات المشاهدة.</li>'
-              : '<li>الإعدادات ← عام ← النظام ← إعدادات إضافية ← الإعلانات: فعّل «تقييد تتبع الإعلانات»، وأطفئ Home Promotion و Content Recommendation.</li>'}
-            <li>أعد تشغيل الشاشة. وإذا تعطّل تطبيق معيّن، رجّع DNS إلى «تلقائي».</li>
-          </ol>
-          <p class="muted" style="font-size:.85rem">تبيه يشمل كل أجهزة البيت؟ حط نفس الرقمين في إعدادات DNS داخل المودم بدل الشاشة.</p>
-        </details>
-        <pre class="log" id="log${i}" hidden></pre>
-      </div>
-    </article>`;
-  }).join('');
+  $('tvs').innerHTML = DEVS.length ? DEVS.map((d, i) =>
+    d.brand === 'android' ? cardAndroid(d, i) : d.brand === 'other' ? cardOther(d) : cardWebosTizen(d, i)).join('')
+    : '<div class="card empty">ما فيه شاشات بعد. اضغط «ابحث عن الشاشات».</div>';
+  const opts = DEVS.map((d, i) => ({d, i})).filter(x => x.d.brand === 'lg' || (x.d.brand === 'samsung' && !INFO.android));
+  $('targetTv').innerHTML = opts.length ? opts.map(x => `<option value="${x.i}">${esc(x.d.name)} — ${esc(x.d.ip)}</option>`).join('')
+    : '<option value="">ابحث عن الشاشات أول (تبويب الشاشات)</option>';
 }
-
+function logBox(id) { const el = $(id); el.hidden = false; return el; }
 async function install(i) {
-  const d = DEVS[i], f = $('file' + i).files[0], log = $('log' + i);
-  log.hidden = false;
+  const d = DEVS[i], f = $('file' + i).files[0], log = logBox('log' + i);
   if (!f) { log.textContent = 'اختر ملف التطبيق أولاً.'; return; }
   const headers = {'X-Brand': d.brand, 'X-Ip': d.ip, 'X-Filename': encodeURIComponent(f.name)};
   if (d.brand === 'android') headers['X-Port'] = $('aport' + i).value.trim() || '5555';
   if (d.brand === 'lg') {
-    headers['X-Mode'] = $('mode' + i).value;
-    headers['X-Secret'] = $('secret' + i).value.trim();
+    headers['X-Mode'] = $('mode' + i).value; headers['X-Secret'] = $('secret' + i).value.trim();
     if (headers['X-Mode'] === 'dev' && !headers['X-Secret']) { log.textContent = 'اكتب الـ Passphrase من تطبيق Developer Mode.'; return; }
   }
-  $('inst' + i).disabled = true;
-  log.textContent = 'أرفع ' + f.name + ' وأثبّته… لا تطفي الشاشة.';
+  $('inst' + i).disabled = true; log.textContent = 'أرفع ' + f.name + ' وأثبّته… لا تطفي الشاشة.';
   const j = await api('/api/install', {method: 'POST', headers, body: f});
   $('inst' + i).disabled = false;
-  if (j.error) { log.textContent = j.error; return; }
-  log.textContent = (j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم التثبيت. تلقاه في قائمة التطبيقات بالشاشة.' : 'ما اكتمل التثبيت. شوف التفاصيل فوق.');
+  log.textContent = j.error || ((j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم التثبيت.' : 'ما اكتمل التثبيت. شوف التفاصيل فوق.'));
+  if (j.ok) toast('تم تثبيت التطبيق');
+}
+async function installScreen(i, out) {
+  const d = DEVS[i], log = out || logBox('log' + i);
+  log.hidden = false;
+  const body = {brand: d.brand, ip: d.ip, country: screenCountry(), city: screenCity(), profile: ($('tzProfile') || {}).value || '', features: feats()};
+  if (d.brand === 'lg') {
+    body.mode = $('mode' + i) ? $('mode' + i).value : 'dev';
+    body.secret = (($('secret' + i) || {}).value || (ST.secrets || {})[d.ip] || '').trim();
+    if (body.mode === 'dev' && !body.secret) {
+      log.textContent = 'اكتب الـ Passphrase في بطاقة الشاشة (تبويب الشاشات) ثم ارجع.';
+      toast('اكتب الـ Passphrase أول'); show('v-tvs'); const s = $('secret' + i); if (s) s.focus(); return;
+    }
+  }
+  const btns = [$('scr' + i), $('installBtn')]; btns.forEach(b => b && (b.disabled = true));
+  log.textContent = 'أجهّز «شاشتي» لمدينة ' + $('screenCity').selectedOptions[0].textContent + ' وأثبّتها… قد يأخذ دقيقة.';
+  const j = await api('/api/screen/install', {method: 'POST', body: JSON.stringify(body)});
+  btns.forEach(b => b && (b.disabled = false));
+  log.textContent = j.error || ((j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم تثبيت «شاشتي». تلقاها في قائمة التطبيقات.' : 'ما اكتمل التثبيت. شوف التفاصيل فوق.'));
+  if (j.ok) toast('تم تثبيت شاشتي ✓');
+}
+function installFromScreen() {
+  const v = $('targetTv').value;
+  if (v === '') { toast('ابحث عن الشاشات أول'); show('v-tvs'); return; }
+  installScreen(+v, $('screenLog'));
+}
+async function androidPair(i) {
+  const d = DEVS[i], log = logBox('log' + i);
+  const port = $('ppport' + i).value.trim(), code = $('pcode' + i).value.trim();
+  if (!port || !code) { log.textContent = 'اكتب منفذ ورمز الإقران من شاشة «إقران جهاز برمز».'; return; }
+  log.textContent = 'أقترن بالشاشة…';
+  const j = await api('/api/android/pair', {method: 'POST', body: JSON.stringify({ip: d.ip, port, code})});
+  log.textContent = j.error || ((j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم الإقران.' : 'ما نجح الإقران. تأكد من الرمز والمنفذ.'));
+}
+async function androidAdblock(i, enable) {
+  const d = DEVS[i], log = logBox('log' + i);
+  log.textContent = enable ? 'أفعّل حجب الإعلانات… وافق على رسالة السماح في الشاشة إن ظهرت.' : 'ألغي الحجب…';
+  const j = await api('/api/android/adblock', {method: 'POST', body: JSON.stringify({ip: d.ip, port: $('aport' + i).value.trim(), enable})});
+  log.textContent = j.error || ((j.log || []).join('\n') + '\n\n' + (j.ok ? (enable ? 'تم. الحجب صار دائم على هذي الشاشة.' : 'تم إلغاء الحجب.') : 'ما اكتمل.'));
+  if (j.ok) toast(enable ? 'الحجب صار دائم ✓' : 'تم إلغاء الحجب');
 }
 
-const FEAT_IDS = {verses: 'fVerses', hadith: 'fHadith', matches: 'fMatches', weather: 'fWeather', quran: 'fQuran'};
-function feats() { const o = {}; for (const k in FEAT_IDS) o[k] = $(FEAT_IDS[k]).checked; o.reciter = $('reciter').value || (() => { try { return JSON.parse(localStorage.getItem('tvm_feats') || '{}').reciter || ''; } catch (e) { return ''; } })(); return o; }
-async function loadReciters() {
-  const j = await api('/api/quran/reciters');
-  const list = j.reciters || [];
-  let saved = '';
-  try { saved = (JSON.parse(localStorage.getItem('tvm_feats') || '{}').reciter) || ''; } catch (e) {}
-  if (!list.length) { $('reciter').innerHTML = '<option value="">تعذّر تحميل القرّاء — تأكد من الإنترنت</option>'; return; }
-  let def = list.find(r => r.label.includes('العفاسي') && r.label.includes('حفص'));
-  $('reciter').innerHTML = list.map(r => `<option value="${r.id}">${esc(r.label)}${r.count < 114 ? ' (' + r.count + ' سورة)' : ''}</option>`).join('');
-  $('reciter').value = saved && list.some(r => String(r.id) === String(saved)) ? saved : (def ? def.id : list[0].id);
-}
-function saveFeats() { try { localStorage.setItem('tvm_feats', JSON.stringify(feats())); } catch (e) {} }
-function loadFeats() {
-  try { const o = JSON.parse(localStorage.getItem('tvm_feats') || '{}'); for (const k in FEAT_IDS) if (k in o) $(FEAT_IDS[k]).checked = !!o[k]; } catch (e) {}
-}
-function screenCountry() { return +($('screenCountry').value || 0); }
-function screenCity() { return +($('screenCity').value || 0); }
-function fillCities() {
-  const c = (INFO.countries || [])[screenCountry()];
-  $('screenCity').innerHTML = c ? c[1].map((n, i) => `<option value="${i}">${esc(n)}</option>`).join('') : '';
+/* المعاينة والتحميل */
+async function ensurePhotos() {
+  const c = await api('/api/photos');
+  if (c.count) return;
+  toast('أحمّل صور الخلفية لأول مرة…');
+  await api('/api/photos/stock', {method: 'POST'});
 }
 async function previewScreen() {
   const w = INFO.android ? null : window.open('', '_blank');
-  const f = feats();
+  if (w) w.document.write('<meta charset="utf-8"><body style="background:#0b1222;color:#eee;font-family:sans-serif;display:grid;place-items:center;height:90vh" dir="rtl"><h2>أجهّز المعاينة…</h2></body>');
+  await ensurePhotos();
   const url = '/screen-preview?k=' + encodeURIComponent(K) + '&country=' + screenCountry() + '&city=' + screenCity() +
-    Object.keys(f).map(k => '&' + k + '=' + (k === 'reciter' ? encodeURIComponent(f[k]) : (f[k] ? 1 : 0))).join('');
-  const c = await api('/api/photos');
-  if (!c.count) {
-    if (w) w.document.write('<meta charset="utf-8"><body style="background:#111;color:#eee;font-family:sans-serif;display:grid;place-items:center;height:90vh" dir="rtl"><h2>أحمّل صور الخلفية لأول مرة… دقيقة وحدة</h2></body>');
-    $('photoNote').textContent = 'أحمّل الصور الجاهزة…';
-    const j = await api('/api/photos/stock', {method: 'POST'});
-    await photoCount();
-    if (j.log) $('photoNote').textContent += ' ' + j.log[j.log.length - 1];
-  }
-  if (w) w.location = url; else if (INFO.android) location.href = url; else window.open(url, '_blank');
+              '&f=' + encodeURIComponent(JSON.stringify(feats()));
+  if (w) w.location = url; else location.href = url;
 }
 async function downloadScreen(brand) {
-  const r = await fetch('/api/screen/package', {method: 'POST', headers: {'X-Key': K}, body: JSON.stringify({brand, country: screenCountry(), city: screenCity(), features: feats()})});
-  if (!r.ok) return;
+  const r = await fetch('/api/screen/package', {method: 'POST', headers: {'X-Key': K},
+    body: JSON.stringify({brand, country: screenCountry(), city: screenCity(), features: feats()})});
+  if (!r.ok) { toast('ما قدرت أجهّز الملف'); return; }
   const blob = await r.blob(), a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = brand === 'lg' ? 'Shashati.ipk' : 'Shashati-tizen-unsigned.zip';
+  a.href = URL.createObjectURL(blob); a.download = brand === 'lg' ? 'Shashati.ipk' : 'Shashati-tizen-unsigned.zip';
   document.body.appendChild(a); a.click(); a.remove();
 }
-async function installScreen(i) {
-  const d = DEVS[i], log = $('log' + i);
-  log.hidden = false;
-  const body = {brand: d.brand, ip: d.ip, country: screenCountry(), city: screenCity(), profile: $('tzProfile').value, features: feats()};
-  if (d.brand === 'lg') {
-    body.mode = $('mode' + i).value; body.secret = $('secret' + i).value.trim();
-    if (body.mode === 'dev' && !body.secret) { log.textContent = 'اكتب الـ Passphrase من تطبيق Developer Mode.'; return; }
-  }
-  $('scr' + i).disabled = true;
-  log.textContent = 'أجهّز «شاشتي» لمدينة ' + $('screenCity').selectedOptions[0].textContent + ' وأثبّتها…';
-  const j = await api('/api/screen/install', {method: 'POST', body: JSON.stringify(body)});
-  $('scr' + i).disabled = false;
-  if (j.error) { log.textContent = j.error; return; }
-  log.textContent = (j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم تثبيت «شاشتي». تلقاها في قائمة التطبيقات.' : 'ما اكتمل التثبيت. شوف التفاصيل فوق.');
-}
 
-async function photoCount() {
-  const j = await api('/api/photos');
-  $('photoNote').textContent = j.count ? 'عندك ' + j.count + ' صورة.' : 'ما فيه صور، بتظهر المناظر المرسومة.';
+/* الخلفيات */
+async function loadPhotos() {
+  const j = await api('/api/photos/list');
+  const list = j.photos || [];
+  $('photoNote').textContent = list.length ? 'عندك ' + list.length + ' صورة. تقدر تخفي أي وحدة من إعدادات الشاشة، أو تحذفها هنا.'
+    : 'ما فيه صور — بتظهر المناظر المرسومة. اضغط «حمّل صوراً جاهزة».';
+  $('photoGrid').innerHTML = list.map(p => `<figure class="ph"><img loading="lazy" src="/screen-photo/${encodeURIComponent(p.name)}?k=${encodeURIComponent(K)}" alt="${esc(p.title || 'صورة')}">
+      <figcaption>${esc(p.title || 'صورتك')}</figcaption><button onclick="delPhoto('${esc(p.name)}')" aria-label="احذف الصورة">✕</button></figure>`).join('');
 }
+async function delPhoto(name) { await api('/api/photos/delete', {method: 'POST', body: JSON.stringify({name})}); loadPhotos(); toast('انحذفت الصورة'); }
 function shrink(file) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const s = Math.min(1, 1920 / img.width, 1200 / img.height);
-      const c = document.createElement('canvas');
+      const s = Math.min(1, 1920 / img.width, 1200 / img.height), c = document.createElement('canvas');
       c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(img.src);
-      c.toBlob(b => b ? resolve(b) : reject(), 'image/jpeg', 0.84);
+      c.toBlob(b => b ? resolve(b) : reject(), 'image/jpeg', 0.85);
     };
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
+    img.onerror = reject; img.src = URL.createObjectURL(file);
   });
 }
 async function addPhotos() {
   const files = [...$('photoFiles').files];
-  if (!files.length) { $('photoNote').textContent = 'اختر صورة أو أكثر أولاً.'; return; }
-  $('photoBtn').disabled = true;
   let done = 0;
   for (const f of files) {
-    $('photoNote').textContent = 'أجهّز الصورة ' + (done + 1) + ' من ' + files.length + '…';
+    $('photoNote').innerHTML = '<span class="spin"></span> أجهّز الصورة ' + (done + 1) + ' من ' + files.length + '…';
     try {
-      const blob = await shrink(f);
-      const j = await api('/api/photos/add', {method: 'POST', body: blob});
-      if (j.error) { $('photoNote').textContent = j.error; break; }
+      const j = await api('/api/photos/add', {method: 'POST', body: await shrink(f)});
+      if (j.error) { toast(j.error); break; }
       done++;
-    } catch (e) { $('photoNote').textContent = 'تعذّرت قراءة ' + f.name; }
+    } catch (e) { toast('تعذّرت قراءة ' + f.name); }
   }
-  $('photoBtn').disabled = false; $('photoFiles').value = '';
-  await photoCount();
+  $('photoFiles').value = ''; loadPhotos(); if (done) toast('أضفت ' + done + ' صورة');
 }
 async function stockPhotos() {
-  $('stockBtn').disabled = true;
-  $('photoNote').textContent = 'أحمّل الصور… قد يأخذ دقيقة.';
+  $('stockBtn').disabled = true; $('photoNote').innerHTML = '<span class="spin"></span> أحمّل الصور… قد يأخذ دقيقة.';
   const j = await api('/api/photos/stock', {method: 'POST'});
-  $('stockBtn').disabled = false;
-  await photoCount();
-  if (j.log) $('photoNote').textContent += ' ' + j.log[j.log.length - 1];
+  $('stockBtn').disabled = false; loadPhotos();
+  if (j.log) toast(j.log[j.log.length - 1]);
 }
-async function clearPhotos() { await api('/api/photos/clear', {method: 'POST'}); await photoCount(); }
+async function clearPhotos() {
+  if (!confirm('تحذف كل الصور؟')) return;
+  await api('/api/photos/clear', {method: 'POST'}); loadPhotos();
+}
 
+/* فلتر الكمبيوتر */
 function paintDns(j) {
-  if (j.error && !('running' in j)) { $('dnsErr').innerHTML = `<div class="state bad">${esc(j.error)}</div>`; return; }
+  if (!j || INFO.android) return;
+  if (j.error && !('running' in j)) { $('dnsErr').innerHTML = `<div class="pill bad">${esc(j.error)}</div>`; return; }
   DNSRUN = j.running;
   $('dnsDot').classList.toggle('on', j.running);
-  $('dnsPill').textContent = j.running ? 'حاجب الإعلانات شغّال' : 'حاجب الإعلانات متوقف';
-  $('dnsBtn').textContent = j.running ? 'أوقف حاجب الإعلانات' : 'شغّل حاجب الإعلانات';
-  $('dnsErr').innerHTML = j.error ? `<div class="state bad">${esc(j.error)}</div>` : '';
+  $('dnsPill').textContent = j.running ? 'شغّال' : 'متوقف';
+  $('dnsBtn').textContent = j.running ? 'أوقف' : 'شغّل';
+  $('dnsErr').innerHTML = j.error ? `<div class="pill bad">${esc(j.error)}</div>` : '';
   $('sBlocked').textContent = (j.blocked || 0).toLocaleString('ar');
   $('sFwd').textContent = (j.forwarded || 0).toLocaleString('ar');
   $('sList').textContent = (j.listSize || 0).toLocaleString('ar');
-  $('extraNote').textContent = j.extraSize ? 'القائمة الموسّعة فيها ' + j.extraSize.toLocaleString('ar') + ' نطاق.' : 'تستخدم القائمة الأساسية حالياً.';
+  $('extraNote').textContent = j.extraSize ? 'القائمة الموسّعة فيها ' + j.extraSize.toLocaleString('ar') + ' نطاق.' : 'تستخدم القائمة الأساسية.';
   const r = j.recent || [];
-  $('feed').innerHTML = r.length
-    ? r.map(x => `<li><span>${esc(x.name)}</span><span class="muted" dir="ltr">${esc(x.client)} ${esc(x.t)}</span></li>`).join('')
-    : '<li class="muted"><span>لا شيء بعد</span></li>';
-  if (!dnsFilled) {
-    $('custom').value = (j.custom || []).join('\n');
-    $('allow').value = (j.allow || []).join('\n');
-    $('upstream').value = j.upstream || '1.1.1.1';
-    dnsFilled = true;
-  }
+  $('feed').innerHTML = r.length ? r.map(x => `<li><span>${esc(x.name)}</span><span class="sub ltr">${esc(x.t)}</span></li>`).join('') : '<li><span>لا شيء بعد</span></li>';
+  if (!dnsFilled) { $('custom').value = (j.custom || []).join('\n'); $('allow').value = (j.allow || []).join('\n'); $('upstream').value = j.upstream || '1.1.1.1'; dnsFilled = true; }
 }
-
-async function toggleDns() {
-  $('dnsBtn').disabled = true;
-  paintDns(await api(DNSRUN ? '/api/dns/stop' : '/api/dns/start', {method: 'POST'}));
-  $('dnsBtn').disabled = false;
-}
+async function toggleDns() { $('dnsBtn').disabled = true; paintDns(await api(DNSRUN ? '/api/dns/stop' : '/api/dns/start', {method: 'POST'})); $('dnsBtn').disabled = false; }
 async function downloadList() {
   $('dlBtn').disabled = true; $('extraNote').textContent = 'أحمّل القائمة…';
   const j = await api('/api/dns/download', {method: 'POST'});
-  $('dlBtn').disabled = false;
-  if (j.error) { $('extraNote').textContent = j.error; return; }
-  paintDns(j);
+  $('dlBtn').disabled = false; if (j.error) { $('extraNote').textContent = j.error; return; } paintDns(j);
 }
 async function saveLists() {
   const lines = id => $(id).value.split('\n').map(s => s.trim()).filter(Boolean);
   paintDns(await api('/api/dns/lists', {method: 'POST', body: JSON.stringify({custom: lines('custom'), allow: lines('allow'), upstream: $('upstream').value})}));
+  toast('انحفظت القوائم');
 }
 
-loadFeats();
+restoreFeats();
+loadInfo().then(() => {
+  scan(false);
+  if (!INFO.android) { api('/api/dns').then(paintDns); setInterval(() => api('/api/dns').then(paintDns), 5000); }
+  let t = 'v-tvs'; try { t = localStorage.getItem('tvm_tab') || 'v-tvs'; } catch (e) {}
+  if ($(t)) show(t);
+});
 loadReciters();
-loadInfo().then(() => scan(false));
-photoCount();
-api('/api/dns').then(paintDns);
-setInterval(() => api('/api/dns').then(paintDns), 4000);
 </script>
 </body>
 </html>

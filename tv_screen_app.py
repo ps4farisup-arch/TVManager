@@ -372,7 +372,12 @@ function loadWeather(){
 }
 
 /* بطاقة الآية والحديث: تتبدّل كل 5 دقائق (آية ثم حديث) */
-var cardSlot = -1, F = CFG.f || {verses: true, hadith: true, matches: true, weather: true};
+var cardSlot = -1;
+var SET = sget('set') || {}; SET.off = SET.off || {}; SET.bgOff = SET.bgOff || {}; SET.lgOff = SET.lgOff || {};
+var BASEF = CFG.f || {verses: true, hadith: true, matches: true, weather: true}, F = {};
+function computeF(){ for (var k in BASEF) F[k] = BASEF[k] && !SET.off[k]; }
+function saveSet(){ sset('set', SET); }
+computeF();
 function cardTick(){
   var slot = Math.floor(Date.now() / (5 * 60000));
   if (slot === cardSlot) return;
@@ -406,61 +411,82 @@ function showCard(label, text, src, isHadith){
   $('card').style.display = 'block';
 }
 
-/* المباريات: دوري روشن ودوري أبطال أوروبا */
-var LEAGUES = [['Saudi-Arabian Pro League', 'دوري روشن', 0], ['UEFA Champions League', 'أبطال أوروبا', 1]];
+/* المباريات (ESPN) */
+var LEAGUES = CFG.leagues || [];
 var TEAMS_AR = [
   ['hilal','الهلال'],['nassr','النصر'],['ittihad','الاتحاد'],['ahli','الأهلي'],['shabab','الشباب'],['ettifaq','الاتفاق'],
   ['taawoun','التعاون'],['taawon','التعاون'],['fateh','الفتح'],['fayha','الفيحاء'],['khaleej','الخليج'],['qadsiah','القادسية'],
-  ['qadisiyah','القادسية'],['okhdood','الأخدود'],['akhdoud','الأخدود'],['kholood','الخلود'],['orobah','العروبة'],['damac','ضمك'],
-  ['wehda','الوحدة'],['raed','الرائد'],['najma','النجمة'],['neom','نيوم'],['hazem','الحزم'],['hazm','الحزم'],['abha','أبها'],
-  ['riyadh','الرياض'],['real madrid','ريال مدريد'],['barcelona','برشلونة'],['bayern','بايرن ميونخ'],['manchester city','مانشستر سيتي'],
-  ['man city','مانشستر سيتي'],['manchester united','مانشستر يونايتد'],['liverpool','ليفربول'],['arsenal','آرسنال'],['chelsea','تشيلسي'],
-  ['paris','باريس سان جيرمان'],['psg','باريس سان جيرمان'],['inter','إنتر ميلان'],['milan','ميلان'],['juventus','يوفنتوس'],
+  ['qadisiyah','القادسية'],['okhdood','الأخدود'],['akhdoud','الأخدود'],['kholood','الخلود'],['khulood','الخلود'],['orobah','العروبة'],
+  ['damac','ضمك'],['wehda','الوحدة'],['raed','الرائد'],['najma','النجمة'],['neom','نيوم'],['hazem','الحزم'],['hazm','الحزم'],
+  ['abha','أبها'],['diriyah','الدرعية'],['faisaly','الفيصلي'],['jabalain','الجبلين'],['zulfi','الزلفي'],['batin','الباطن'],
+  ['riyadh','الرياض'],['real madrid','ريال مدريد'],['real sociedad','ريال سوسيداد'],['real betis','ريال بيتيس'],['barcelona','برشلونة'],
+  ['bayern','بايرن ميونخ'],['manchester city','مانشستر سيتي'],['man city','مانشستر سيتي'],['manchester united','مانشستر يونايتد'],
+  ['man utd','مانشستر يونايتد'],['liverpool','ليفربول'],['arsenal','آرسنال'],['chelsea','تشيلسي'],['paris saint','باريس سان جيرمان'],
+  ['psg','باريس سان جيرمان'],['internazionale','إنتر ميلان'],['inter milan','إنتر ميلان'],['ac milan','ميلان'],['juventus','يوفنتوس'],
   ['dortmund','دورتموند'],['atletico','أتلتيكو مدريد'],['atlético','أتلتيكو مدريد'],['napoli','نابولي'],['benfica','بنفيكا'],
   ['porto','بورتو'],['tottenham','توتنهام'],['leverkusen','ليفركوزن'],['newcastle','نيوكاسل'],['aston villa','أستون فيلا'],
-  ['atalanta','أتالانتا'],['sporting','سبورتنغ لشبونة'],['ajax','أياكس'],['psv','آيندهوفن'],['celtic','سلتيك'],['monaco','موناكو'],
+  ['atalanta','أتالانتا'],['sporting cp','سبورتنغ لشبونة'],['ajax','أياكس'],['psv','آيندهوفن'],['celtic','سلتيك'],['monaco','موناكو'],
   ['marseille','مارسيليا'],['galatasaray','غلطة سراي'],['brugge','كلوب بروج'],['leipzig','لايبزيغ'],['frankfurt','فرانكفورت'],
-  ['feyenoord','فينورد'],['bologna','بولونيا'],['girona','جيرونا'],['villarreal','فياريال'],['athletic','أتلتيك بيلباو'],
-  ['roma','روما'],['lille','ليل'],['stuttgart','شتوتغارت'],['olympiacos','أولمبياكوس'],['copenhagen','كوبنهاغن']
+  ['feyenoord','فينورد'],['bologna','بولونيا'],['girona','جيرونا'],['villarreal','فياريال'],['athletic club','أتلتيك بيلباو'],
+  ['as roma','روما'],['lille','ليل'],['stuttgart','شتوتغارت'],['olympiacos','أولمبياكوس'],['copenhagen','كوبنهاغن'],
+  ['sevilla','إشبيلية'],['valencia','فالنسيا'],['lazio','لاتسيو'],['fiorentina','فيورنتينا'],['west ham','وست هام'],
+  ['everton','إيفرتون'],['brighton','برايتون'],['lyon','ليون'],['wolfsburg','فولفسبورغ'],['al sadd','السد'],['al duhail','الدحيل'],
+  ['al ain','العين'],['sharjah','الشارقة'],['shabab al ahli','شباب الأهلي'],['al wahda','الوحدة الإماراتي']
 ];
 function teamAr(n){
   var low = String(n || '').toLowerCase().replace(/[-_.]/g, ' ');
   for (var i = 0; i < TEAMS_AR.length; i++) if (low.indexOf(TEAMS_AR[i][0]) >= 0) return TEAMS_AR[i][1];
   return n || '';
 }
-function utcDay(d){ return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); }
+function isoDate(s){
+  var m = String(s || '').match(/^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)(?::(\d\d))?/);
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0))) : new Date(NaN);
+}
+function eDay(d){ return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()); }
+function activeLeagues(){
+  var o = [];
+  for (var i = 0; i < LEAGUES.length; i++) if (!SET.lgOff[LEAGUES[i][0]]) o.push([LEAGUES[i][0], LEAGUES[i][1], i]);
+  return o;
+}
 var MATCHES = [], mPage = 0, mLive = false;
 function loadMatches(){
+  if (!F.matches) return;
+  var lgs = activeLeagues();
+  if (!lgs.length){ MATCHES = []; renderMatch(); return; }
   var now = new Date(), start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  var end = new Date(start.getTime() + 86399000), days = [utcDay(start)];
-  if (utcDay(end) !== days[0]) days.push(utcDay(end));
+  var end = new Date(start.getTime() + 86400000);
+  var days = [eDay(new Date(start.getTime() - 43200000)), eDay(start)];
   var pending = 0, found = {}, list = [];
   function one(lg, day){
     pending++;
-    get('https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d=' + day + '&l=' + encodeURIComponent(lg[0]), function(j){
+    get('https://site.api.espn.com/apis/site/v2/sports/soccer/' + lg[0] + '/scoreboard?dates=' + day, function(j){
       var ev = (j && j.events) || [];
       for (var i = 0; i < ev.length; i++){
-        var e = ev[i], ts = e.strTimestamp || (e.dateEvent + 'T' + (e.strTime || '00:00:00'));
-        var t = new Date(String(ts).substr(0, 19) + 'Z');
-        if (isNaN(t.getTime()) || t < start || t > end || found[e.idEvent]) continue;
-        found[e.idEvent] = 1;
-        list.push({h: teamAr(e.strHomeTeam), a: teamAr(e.strAwayTeam), hs: e.intHomeScore, as: e.intAwayScore,
-                   t: t, st: String(e.strStatus || ''), pr: e.strProgress, comp: lg[1], pri: lg[2]});
+        var e = ev[i], c = (e.competitions || [])[0] || {}, cs = c.competitors || [], h = null, a = null;
+        for (var k = 0; k < cs.length; k++){ if (cs[k].homeAway === 'home') h = cs[k]; else a = cs[k]; }
+        var t = isoDate(e.date || c.date);
+        if (!h || !a || isNaN(t.getTime()) || t < start || t >= end || found[e.id]) continue;
+        found[e.id] = 1;
+        var st = c.status || e.status || {}, ty = st.type || {};
+        list.push({h: teamAr(h.team && h.team.displayName), a: teamAr(a.team && a.team.displayName), hs: h.score, as: a.score,
+                   t: t, state: ty.state || 'pre', name: String(ty.name || ''), clock: st.displayClock || '', comp: lg[1], pri: lg[2]});
       }
       if (--pending === 0){
-        list.sort(function(x, y){ return x.pri - y.pri || x.t - y.t; });
-        MATCHES = list.slice(0, 10); mPage = 0; renderMatch();
+        list.sort(function(x, y){ return (x.state === 'in' ? 0 : 1) - (y.state === 'in' ? 0 : 1) || x.pri - y.pri || x.t - y.t; });
+        MATCHES = list.slice(0, 12); mPage = 0; renderMatch();
       }
     });
   }
-  for (var a = 0; a < LEAGUES.length; a++) for (var b = 0; b < days.length; b++) one(LEAGUES[a], days[b]);
+  for (var a = 0; a < lgs.length; a++) for (var b = 0; b < days.length; b++) one(lgs[a], days[b]);
 }
 function matchState(m){
-  var s = m.st.toUpperCase();
-  if (/^(FT|AET|PEN|MATCH FINISHED)/.test(s)) return ['done', 'النتيجة النهائية'];
-  if (/POSTP|CANC|ABD/.test(s)) return ['off', 'مؤجلة'];
-  if (s === 'HT') return ['live', 'مباشر · استراحة'];
-  if (/^(1H|2H|ET|P|LIVE|BT)$/.test(s) || (m.pr && /^\d+$/.test(String(m.pr)))) return ['live', 'مباشر' + (m.pr ? ' · ' + ar(m.pr) + "'" : '')];
+  if (/POSTPONED|CANCEL|ABANDON|SUSPEND|DELAY/.test(m.name)) return ['off', 'مؤجلة'];
+  if (m.state === 'post') return ['done', 'النتيجة النهائية'];
+  if (m.state === 'in'){
+    if (m.name.indexOf('HALFTIME') >= 0) return ['live', 'مباشر · استراحة'];
+    var c = String(m.clock || '').replace(/'/g, '');
+    return ['live', 'مباشر' + (c && c !== '0' ? ' · ' + ar(c) + "'" : '')];
+  }
   var hh = m.t.getHours(), h12 = hh % 12 || 12;
   return ['soon', 'تبدأ ' + ar(h12 + ':' + pad(m.t.getMinutes())) + (hh < 12 ? ' ص' : ' م')];
 }
@@ -468,39 +494,55 @@ function renderMatch(){
   mLive = false;
   for (var i = 0; i < MATCHES.length; i++) if (matchState(MATCHES[i])[0] === 'live') mLive = true;
   if (!MATCHES.length){
+    var names = [], lg = activeLeagues();
+    for (var j = 0; j < lg.length && j < 2; j++) names.push(lg[j][1]);
     $('mLbl').innerHTML = 'مباريات اليوم'; $('mBody').className = 'nm none';
-    $('mBody').innerHTML = 'ما فيه مباريات اليوم'; $('mSub').innerHTML = 'دوري روشن · أبطال أوروبا';
+    $('mBody').innerHTML = lg.length ? 'ما فيه مباريات اليوم' : 'ما اخترت أي دوري';
+    $('mSub').innerHTML = names.join(' · ') + (lg.length > 2 ? ' …' : '');
     return;
   }
   var m = MATCHES[mPage % MATCHES.length], st = matchState(m);
-  var score = (st[0] === 'soon' || m.hs === null || m.hs === undefined || m.hs === '') ? ' × ' : ' ' + ar(m.hs) + ' - ' + ar(m.as) + ' ';
+  var noScore = st[0] === 'soon' || st[0] === 'off' || m.hs === null || m.hs === undefined || m.hs === '';
+  var score = noScore ? ' × ' : ' ' + ar(m.hs) + ' - ' + ar(m.as) + ' ';
   $('mLbl').innerHTML = 'مباريات اليوم' + (MATCHES.length > 1 ? ' · ' + ar(mPage % MATCHES.length + 1) + '/' + ar(MATCHES.length) : '');
   $('mBody').className = 'nm';
   $('mBody').innerHTML = m.h + score + m.a;
   $('mSub').innerHTML = (st[0] === 'live' ? '<span class="live">' + st[1] + '</span>' : st[1]) + ' · ' + m.comp;
 }
 
+var ACT = [];
 function buildBg(){
   var i;
   if (CFG.photos && CFG.photos.length){
     for (i = 0; i < CFG.photos.length; i++){
       var ph = CFG.photos[i];
-      BG.push({photo: ph[0], name: ph[1] || ('صورة ' + ar(i + 1) + ' من ' + ar(CFG.photos.length)), tag: ph[2] || 'صوري', credit: ph[3] || ''});
+      BG.push({key: ph[0], photo: ph[0], name: ph[1] || ('صورة ' + ar(i + 1) + ' من ' + ar(CFG.photos.length)), tag: ph[2] || 'صوري', credit: ph[3] || ''});
     }
   }
   if (!BG.length || CFG.mix){
-    for (i = 0; i < CFG.scenes.length; i++) BG.push({scene: CFG.scenes[i][3], name: CFG.scenes[i][0] + ' · ' + CFG.scenes[i][1], tag: CFG.scenes[i][2]});
+    for (i = 0; i < CFG.scenes.length; i++) BG.push({key: 'scene' + i, scene: CFG.scenes[i][3], name: CFG.scenes[i][0] + ' · ' + CFG.scenes[i][1], tag: CFG.scenes[i][2]});
   }
   var saved = sget('bg');
-  bgIdx = (saved !== null && saved < BG.length) ? saved : 0;
+  bgIdx = (saved !== null && saved >= 0) ? saved : 0;
+  refreshActive();
+}
+function refreshActive(){
+  var i;
+  ACT = [];
+  for (i = 0; i < BG.length; i++) if (!SET.bgOff[BG[i].key]) ACT.push(i);
+  if (!ACT.length) for (i = 0; i < BG.length; i++) ACT.push(i);
+  var p = ACT.indexOf(bgShown);
+  if (p >= 0) bgIdx = p; else setBg(bgIdx);
 }
 function setBg(i){
-  bgIdx = ((i % BG.length) + BG.length) % BG.length;
+  if (!ACT.length) return;
+  bgIdx = ((i % ACT.length) + ACT.length) % ACT.length;
   lastSwitch = Date.now();
   sset('bg', bgIdx);
-  if (bgIdx === bgShown) return;
-  bgShown = bgIdx;
-  var b = BG[bgIdx], show = layerA ? $('lA') : $('lB'), hide = layerA ? $('lB') : $('lA');
+  var bi = ACT[bgIdx];
+  if (bi === bgShown) return;
+  bgShown = bi;
+  var b = BG[bi], show = layerA ? $('lA') : $('lB'), hide = layerA ? $('lB') : $('lA');
   if (b.photo){ show.innerHTML = ''; show.style.backgroundImage = 'url("' + b.photo + '")'; }
   else { show.style.backgroundImage = 'none'; show.innerHTML = b.scene; }
   show.className = b.photo ? 'layer on ph' : 'layer on';
@@ -546,46 +588,82 @@ function drift(){
   $('ui').style.webkitTransform = t; $('ui').style.transform = t;
 }
 
-/* القرآن الكريم */
-var Q = CFG.quran, qPlaying = false, qMode = sget('qmode') || 'cont', qIdx = 0;
-if (Q){ var qs = sget('qsurah'); qIdx = Math.max(0, Q.surahs.indexOf(qs)); }
+/* القرآن الكريم: أكثر من قارئ */
+var Q = CFG.quran, qPlaying = false, qMode = sget('qmode') || 'cont', qIdx = 0, qRec = 0;
+if (Q && !(Q.recs && Q.recs.length)) Q = null;
+function R(){ return Q.recs[qRec]; }
+if (Q){
+  qRec = Math.min(Q.recs.length - 1, Math.max(0, +sget('qrec') || 0));
+  qIdx = Math.max(0, R().surahs.indexOf(sget('qsurah')));
+}
 function sName(n){ return (Q && Q.names && Q.names[n]) ? 'سورة ' + Q.names[n] : 'سورة ' + ar(n); }
-function qUrl(n){ return Q.server + (n < 10 ? '00' : n < 100 ? '0' : '') + n + '.mp3'; }
+function qUrl(n){ return R().server + (n < 10 ? '00' : n < 100 ? '0' : '') + n + '.mp3'; }
 function qPaint(){
   if (!Q) return;
   $('qbar').style.display = 'block';
   $('qbar').className = qPlaying ? 'on' : '';
   $('qIcon').innerHTML = qPlaying ? '♪' : '▶';
-  $('qText').innerHTML = Q.name + ' · ' + sName(Q.surahs[qIdx]) + (qMode === 'cont' ? ' · متواصل' : '');
+  $('qText').innerHTML = R().name + ' · ' + sName(R().surahs[qIdx]) + (qMode === 'cont' ? ' · متواصل' : '');
 }
 function qPlay(){
   if (!Q) return;
-  var a = $('qa'), u = qUrl(Q.surahs[qIdx]);
+  var a = $('qa'), u = qUrl(R().surahs[qIdx]);
   if (a.getAttribute('data-src') !== u){ a.src = u; a.setAttribute('data-src', u); }
   try { var pr = a.play(); if (pr && pr['catch']) pr['catch'](function(){ qPlaying = false; qPaint(); }); } catch(e){}
-  qPlaying = true; sset('qsurah', Q.surahs[qIdx]); qPaint();
+  qPlaying = true; sset('qsurah', R().surahs[qIdx]); qPaint();
 }
 function qPause(){ try { $('qa').pause(); } catch(e){} qPlaying = false; qPaint(); }
 function qToggle(){ if (qPlaying) qPause(); else qPlay(); }
-function qStep(d){ if (!Q) return; qIdx = (qIdx + d + Q.surahs.length) % Q.surahs.length; if (qPlaying) qPlay(); else { sset('qsurah', Q.surahs[qIdx]); qPaint(); } }
+function qStep(d){ if (!Q) return; var n = R().surahs.length; qIdx = (qIdx + d + n) % n; if (qPlaying) qPlay(); else { sset('qsurah', R().surahs[qIdx]); qPaint(); } }
+function setRec(i){
+  var cur = R().surahs[qIdx];
+  qRec = i; sset('qrec', i);
+  var p = R().surahs.indexOf(cur); qIdx = p >= 0 ? p : 0;
+  $('qa').removeAttribute('data-src');
+  if (qPlaying) qPlay(); else qPaint();
+}
 $('qa').addEventListener('ended', function(){
-  if (qMode === 'cont'){ qIdx = (qIdx + 1) % Q.surahs.length; qPlay(); } else { qPlaying = false; qPaint(); }
+  if (qMode === 'cont'){ qIdx = (qIdx + 1) % R().surahs.length; qPlay(); } else { qPlaying = false; qPaint(); }
 });
 $('qa').addEventListener('error', function(){ if (qPlaying){ qPlaying = false; qPaint(); } });
 
+/* القائمة والإعدادات على الشاشة */
+var SECT = [['verses', 'آيات قرآنية'], ['hadith', 'أحاديث صحيح البخاري'], ['matches', 'مباريات اليوم'], ['weather', 'الطقس']];
+var TITLES = {menu: 'القائمة', settings: 'الإعدادات', sections: 'الأقسام الظاهرة', bgs: 'الخلفيات — OK للإخفاء أو الإظهار',
+              leagues: 'الدوريات', reciter: 'اختر القارئ', surah: 'اختر السورة', country: 'اختر دولتك'};
+function chk(on){ return on ? '✓  ' : '○  '; }
 function menuItems(){
   var m = [];
   if (Q){
     m.push([qPlaying ? '⏸  إيقاف القراءة' : '▶  تشغيل القراءة', 'toggle']);
-    m.push(['اختيار السورة  (' + sName(Q.surahs[qIdx]) + ')', 'surah']);
+    m.push(['اختيار السورة  (' + sName(R().surahs[qIdx]) + ')', 'surah']);
+    if (Q.recs.length > 1) m.push(['القارئ: ' + R().name, 'reciter']);
     m.push(['طريقة التشغيل: ' + (qMode === 'cont' ? 'متواصل (سورة بعد سورة)' : 'سورة واحدة'), 'mode']);
   }
+  m.push(['الإعدادات', 'settings']);
   m.push(['تغيير الدولة والمدينة', 'city']);
   return m;
 }
+function settingsItems(){
+  var m = [['الأقسام الظاهرة على الشاشة', 'sections'], ['الخلفيات', 'bgs']];
+  if (BASEF.matches && LEAGUES.length) m.push(['الدوريات', 'leagues']);
+  return m;
+}
+function sectionItems(){
+  var o = [];
+  for (var i = 0; i < SECT.length; i++) if (BASEF[SECT[i][0]]) o.push([chk(!SET.off[SECT[i][0]]) + SECT[i][1], SECT[i][0]]);
+  if (!o.length) o.push(['ما فيه أقسام اختيارية', '']);
+  return o;
+}
 function pickItems(){
+  var o = [], i;
   if (pickMode === 'menu') return menuItems();
-  if (pickMode === 'surah'){ var o = []; for (var i = 0; i < Q.surahs.length; i++) o.push([ar(Q.surahs[i]) + '. ' + sName(Q.surahs[i])]); return o; }
+  if (pickMode === 'settings') return settingsItems();
+  if (pickMode === 'sections') return sectionItems();
+  if (pickMode === 'bgs'){ for (i = 0; i < BG.length; i++) o.push([chk(!SET.bgOff[BG[i].key]) + BG[i].name, BG[i].key]); return o; }
+  if (pickMode === 'leagues'){ for (i = 0; i < LEAGUES.length; i++) o.push([chk(!SET.lgOff[LEAGUES[i][0]]) + LEAGUES[i][1], LEAGUES[i][0]]); return o; }
+  if (pickMode === 'reciter'){ for (i = 0; i < Q.recs.length; i++) o.push([(i === qRec ? '● ' : '') + Q.recs[i].name]); return o; }
+  if (pickMode === 'surah'){ for (i = 0; i < R().surahs.length; i++) o.push([ar(R().surahs[i]) + '. ' + sName(R().surahs[i])]); return o; }
   return pickMode === 'country' ? CFG.countries : CFG.countries[pickCountry][3];
 }
 function openMenu(){ picking = true; pickMode = 'menu'; sel = 0; renderPicker(); $('picker').style.display = 'block'; }
@@ -594,25 +672,45 @@ function renderPicker(){
   var items = pickItems(), html = '';
   for (var i = 0; i < items.length; i++) html += '<div id="c' + i + '">' + items[i][0] + '</div>';
   $('list').innerHTML = html;
-  $('pickTitle').innerHTML = pickMode === 'menu' ? 'القائمة' : pickMode === 'surah' ? 'اختر السورة' :
-    pickMode === 'country' ? 'اختر دولتك' : 'اختر مدينتك في ' + CFG.countries[pickCountry][0];
+  if (sel >= items.length) sel = items.length - 1;
+  $('pickTitle').innerHTML = TITLES[pickMode] || ('اختر مدينتك في ' + CFG.countries[pickCountry][0]);
   paintPicker();
 }
 function paintPicker(){
   var items = pickItems();
   for (var i = 0; i < items.length; i++) $('c' + i).className = i === sel ? 'sel' : '';
   var el = $('c' + sel), box = $('list');
-  box.scrollTop = Math.max(0, el.offsetTop - box.clientHeight / 2 + el.offsetHeight / 2);
+  if (el) box.scrollTop = Math.max(0, el.offsetTop - box.clientHeight / 2 + el.offsetHeight / 2);
 }
 function closePicker(){ picking = false; $('picker').style.display = 'none'; }
+function applySettings(){
+  computeF(); saveSet();
+  document.querySelector('.wx').style.display = F.weather ? '' : 'none';
+  document.querySelector('.matches').style.display = F.matches ? '' : 'none';
+  if (F.weather) loadWeather();
+  cardSlot = -1; cardTick();
+  MATCHES = []; if (F.matches) loadMatches();
+}
 function choose(){
+  var items = pickItems(), key = items[sel] && items[sel][1];
   if (pickMode === 'menu'){
-    var act = menuItems()[sel][1];
-    if (act === 'toggle'){ closePicker(); qToggle(); return; }
-    if (act === 'mode'){ qMode = qMode === 'cont' ? 'one' : 'cont'; sset('qmode', qMode); qPaint(); renderPicker(); return; }
-    if (act === 'surah'){ pickMode = 'surah'; sel = qIdx; renderPicker(); return; }
-    if (act === 'city'){ pickMode = 'country'; sel = loc[0]; renderPicker(); return; }
+    if (key === 'toggle'){ closePicker(); qToggle(); return; }
+    if (key === 'mode'){ qMode = qMode === 'cont' ? 'one' : 'cont'; sset('qmode', qMode); qPaint(); renderPicker(); return; }
+    if (key === 'surah'){ pickMode = 'surah'; sel = qIdx; renderPicker(); return; }
+    if (key === 'reciter'){ pickMode = 'reciter'; sel = qRec; renderPicker(); return; }
+    if (key === 'settings'){ pickMode = 'settings'; sel = 0; renderPicker(); return; }
+    if (key === 'city'){ pickMode = 'country'; sel = loc[0]; renderPicker(); return; }
   }
+  if (pickMode === 'settings'){ pickMode = key; sel = 0; renderPicker(); return; }
+  if (pickMode === 'sections'){ if (key){ SET.off[key] = !SET.off[key]; applySettings(); renderPicker(); } return; }
+  if (pickMode === 'bgs'){
+    var shown = 0;
+    for (var i = 0; i < BG.length; i++) if (!SET.bgOff[BG[i].key]) shown++;
+    if (!SET.bgOff[key] && shown <= 1) return;           // لازم تبقى خلفية وحدة على الأقل
+    SET.bgOff[key] = !SET.bgOff[key]; saveSet(); refreshActive(); renderPicker(); return;
+  }
+  if (pickMode === 'leagues'){ SET.lgOff[key] = !SET.lgOff[key]; saveSet(); MATCHES = []; loadMatches(); renderMatch(); renderPicker(); return; }
+  if (pickMode === 'reciter'){ setRec(sel); pickMode = 'menu'; sel = 0; renderPicker(); return; }
   if (pickMode === 'surah'){ qIdx = sel; closePicker(); qPlay(); return; }
   if (pickMode === 'country'){
     pickCountry = sel; pickMode = 'city'; sel = pickCountry === loc[0] ? loc[1] : 0;
@@ -622,6 +720,13 @@ function choose(){
   P = null; $('times').innerHTML = ''; $('nextName').innerHTML = '&nbsp;'; $('nextLeft').innerHTML = '';
   $('wxNow').innerHTML = '&nbsp;'; $('wxSub').innerHTML = ''; $('wxDays').innerHTML = '';
   loadPrayers(); if (F.weather) loadWeather(); tick();
+}
+function goBack(){
+  if (pickMode === 'city'){ pickMode = 'country'; sel = pickCountry; }
+  else if (pickMode === 'sections' || pickMode === 'bgs' || pickMode === 'leagues'){ pickMode = 'settings'; sel = 0; }
+  else if (pickMode === 'menu'){ closePicker(); return; }
+  else { pickMode = 'menu'; sel = 0; }
+  renderPicker();
 }
 function exitApp(){
   try { if (window.tizen){ tizen.application.getCurrentApplication().exit(); return; } } catch(e){}
@@ -635,16 +740,12 @@ document.addEventListener('keydown', function(e){
     if (k === 38){ sel = (sel - 1 + len) % len; paintPicker(); }
     else if (k === 40){ sel = (sel + 1) % len; paintPicker(); }
     else if (k === 13) choose();
-    else if (back){
-      if (pickMode === 'city'){ pickMode = 'country'; sel = pickCountry; renderPicker(); }
-      else if (pickMode === 'surah' || (pickMode === 'country' && Q)){ pickMode = 'menu'; sel = 0; renderPicker(); }
-      else closePicker();
-    }
+    else if (back) goBack();
     e.preventDefault(); return;
   }
   if (k === 39 || k === 40){ setBg(bgIdx + 1); e.preventDefault(); }
   else if (k === 37 || k === 38){ setBg(bgIdx - 1); e.preventDefault(); }
-  else if (k === 13){ if (Q) openMenu(); else openPicker(); e.preventDefault(); }
+  else if (k === 13){ openMenu(); e.preventDefault(); }
   else if (Q && (k === 415 || k === 10252 || k === 179)){ qToggle(); e.preventDefault(); }
   else if (Q && (k === 19 || k === 413)){ qPause(); e.preventDefault(); }
   else if (Q && (k === 417 || k === 427 || k === 33)){ qStep(1); e.preventDefault(); }
@@ -654,15 +755,17 @@ document.addEventListener('keydown', function(e){
 
 $('stars').innerHTML = CFG.stars;
 try { if (window.tizen && tizen.tvinputdevice){ ['MediaPlayPause','MediaPlay','MediaPause','MediaStop','MediaFastForward','MediaRewind','ChannelUp','ChannelDown'].forEach(function(n){ try { tizen.tvinputdevice.registerKey(n); } catch(e){} }); } } catch(e){}
-if (Q) qPaint(); else $('hint').innerHTML = 'اضغط OK لتغيير الدولة والمدينة';
+if (Q) qPaint();
+$('hint').innerHTML = 'اضغط OK للقائمة والإعدادات';
 if (!F.weather) document.querySelector('.wx').style.display = 'none';
-if (!F.matches){ document.querySelector('.matches').style.display = 'none'; loadMatches = function(){}; }
-buildBg(); setBg(bgIdx);
+if (!F.matches) document.querySelector('.matches').style.display = 'none';
+buildBg();
 tick(); loadPrayers(); if (F.weather) loadWeather(); cardTick(); loadMatches(); drift(); keepAwake();
 setInterval(cardTick, 15000);
 setInterval(function(){ if (MATCHES.length > 1){ mPage++; renderMatch(); } }, 8000);
 var mCount = 0;
 setInterval(function(){ mCount++; if (mLive || mCount % 5 === 0) loadMatches(); }, 2 * 60000);
+setInterval(function(){ if (!MATCHES.length) loadMatches(); }, 30 * 60000);
 setInterval(keepAwake, 5 * 60000);
 setInterval(tick, 10000);
 setInterval(function(){ if (F.weather) loadWeather(); }, 30 * 60000);
@@ -1075,23 +1178,104 @@ def quran_reciters(log=None):
     return _mp3q_load(log).get("reciters", [])
 
 
-def quran_config(reciter_id=None, log=None):
+def quran_config(reciter_ids=None, log=None):
+    """reciter_ids: رقم قارئ أو قائمة أرقام (أكثر من قارئ تختار بينهم على الشاشة)."""
     data = _mp3q_load(log)
     recs = data.get("reciters", [])
     if not recs:
         return None
-    pick = None
-    try:
-        rid = int(reciter_id) if reciter_id not in (None, "") else None
-    except ValueError:
-        rid = None
-    if rid is not None:
-        pick = next((r for r in recs if r["id"] == rid), None)
-    if pick is None:   # الافتراضي: مشاري العفاسي (حفص) إن وجد
-        pick = next((r for r in recs if "العفاسي" in r["label"] and "حفص" in r["label"]), None) or recs[0]
+    if not isinstance(reciter_ids, (list, tuple)):
+        reciter_ids = [reciter_ids] if reciter_ids not in (None, "") else []
+    picks = []
+    for rid in reciter_ids:
+        try:
+            r = next((x for x in recs if x["id"] == int(rid)), None)
+        except (TypeError, ValueError):
+            r = None
+        if r and r not in picks:
+            picks.append(r)
+    if not picks:   # الافتراضي: مشاري العفاسي (حفص) إن وجد
+        picks = [next((r for r in recs if "العفاسي" in r["label"] and "حفص" in r["label"]), None) or recs[0]]
     names = data.get("suwar") or []
-    return {"name": pick["label"].split(" — ")[0], "full": pick["label"], "server": pick["server"],
-            "surahs": pick["surahs"], "names": names if len(names) == 115 else []}
+    return {"recs": [{"name": r["label"].split(" — ")[0], "full": r["label"], "server": r["server"],
+                      "surahs": r["surahs"]} for r in picks[:6]],
+            "names": names if len(names) == 115 else []}
+
+
+# ---------------------------------------------------------------- المباريات (ESPN)
+LEAGUES = [
+    ("ksa.1", "دوري روشن السعودي"),
+    ("ksa.kings.cup", "كأس الملك"),
+    ("afc.champions", "دوري أبطال آسيا للنخبة"),
+    ("uefa.champions", "دوري أبطال أوروبا"),
+    ("eng.1", "الدوري الإنجليزي"),
+    ("esp.1", "الدوري الإسباني"),
+    ("ita.1", "الدوري الإيطالي"),
+    ("ger.1", "الدوري الألماني"),
+    ("fra.1", "الدوري الفرنسي"),
+]
+DEFAULT_LEAGUES = ["ksa.1", "ksa.kings.cup", "afc.champions", "uefa.champions"]
+ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/%s/scoreboard?dates=%s"
+
+
+def parse_espn(data, start_utc, end_utc):
+    """يحوّل رد ESPN إلى قائمة مباريات بين وقتين (UTC) — نفس منطق الشاشة."""
+    import datetime as _dt
+    out = []
+    for e in (data or {}).get("events", []) or []:
+        c = (e.get("competitions") or [{}])[0]
+        home = away = None
+        for t in c.get("competitors", []) or []:
+            if t.get("homeAway") == "home":
+                home = t
+            else:
+                away = t
+        try:
+            ts = _dt.datetime.strptime(str(e.get("date") or c.get("date"))[:16], "%Y-%m-%dT%H:%M").replace(tzinfo=_dt.timezone.utc)
+        except ValueError:
+            continue
+        if not home or not away or not (start_utc <= ts < end_utc):
+            continue
+        st = c.get("status") or e.get("status") or {}
+        ty = st.get("type") or {}
+        out.append({"id": e.get("id"), "home": (home.get("team") or {}).get("displayName", ""),
+                    "away": (away.get("team") or {}).get("displayName", ""),
+                    "hs": home.get("score"), "as": away.get("score"), "time": ts.isoformat(),
+                    "state": ty.get("state", "pre"), "status": ty.get("name", ""), "clock": st.get("displayClock", "")})
+    return out
+
+
+def fetch_matches(slugs, tz_offset_minutes=180):
+    """للتأكد من البرنامج: مباريات اليوم (بتوقيت المستخدم) للدوريات المختارة، بنفس طريقة الشاشة."""
+    import datetime as _dt
+    import urllib.request
+    tz = _dt.timezone(_dt.timedelta(minutes=tz_offset_minutes))
+    now = _dt.datetime.now(tz)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + _dt.timedelta(days=1)
+    days = [(start - _dt.timedelta(hours=12)).strftime("%Y%m%d"), start.strftime("%Y%m%d")]
+    names = dict(LEAGUES)
+    result, errors, seen = [], [], set()
+    for slug in slugs:
+        if slug not in names:
+            continue
+        for day in days:
+            try:
+                req = urllib.request.Request(ESPN_URL % (slug, day), headers={"User-Agent": "TVManager/1.5"})
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+            except Exception as e:
+                errors.append("%s: %s" % (names[slug], e))
+                continue
+            for m in parse_espn(data, start.astimezone(_dt.timezone.utc), end.astimezone(_dt.timezone.utc)):
+                if m["id"] in seen:
+                    continue
+                seen.add(m["id"])
+                m["league"] = names[slug]
+                m["local"] = _dt.datetime.fromisoformat(m["time"]).astimezone(tz).strftime("%H:%M")
+                result.append(m)
+    result.sort(key=lambda m: m["time"])
+    return result, errors
 
 
 FEATURES = ("verses", "hadith", "matches", "weather", "quran")
@@ -1115,7 +1299,8 @@ def page(country=0, city=0, photo_base="photos/", photo_suffix="", log=None, kee
                     photo_meta(n).get("credit", "")] for n in photo_names()],
         "mix": False,
         "hadith": bukhari_hadiths(log) if feats["hadith"] else [],
-        "quran": quran_config((features or {}).get("reciter"), log) if feats["quran"] else None,
+        "quran": quran_config((features or {}).get("reciters") or (features or {}).get("reciter"), log) if feats["quran"] else None,
+        "leagues": [[k, v] for k, v in LEAGUES if k in ((features or {}).get("leagues") or DEFAULT_LEAGUES)],
         "keep": keep_src,
     }
     data = json.dumps(cfg, ensure_ascii=False).replace("</", "<\\/")
