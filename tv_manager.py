@@ -32,10 +32,22 @@ import webbrowser
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
+PARAMIKO_ERR = ""
 try:
     import paramiko
-except ImportError:
+except Exception as _e:          # على الجوال قد يفشل استيراد مكتبات التشفير الأصلية
     paramiko = None
+    PARAMIKO_ERR = "%s: %s" % (type(_e).__name__, _e)
+
+
+def _jsch_ok():
+    """على تطبيق الأندرويد نستخدم مكتبة JSch (جافا) للاتصال بشاشات webOS."""
+    try:
+        from java import jclass
+        jclass("com.jcraft.jsch.JSch")
+        return True
+    except Exception:
+        return False
 
 import tv_screen_app as screen
 
@@ -635,6 +647,8 @@ def load_webos_key(pem, passphrase):
 # ---------------------------------------------------------------- تثبيت على LG
 def _lg_ssh(ip, mode, secret):
     if paramiko is None:
+        if IS_ANDROID:
+            raise RuntimeError("مكتبة الاتصال ما اشتغلت على الجوال: " + PARAMIKO_ERR)
         raise RuntimeError("مكتبة paramiko غير مثبتة. نفّذ: pip install paramiko ثم أعد تشغيل البرنامج.")
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -689,7 +703,172 @@ def _ssh_exec(client, cmd, timeout=60):
     return (stdout.read() + stderr.read()).decode(errors="ignore").strip()
 
 
+# ---------------------------------------------------------------- LG عبر JSch (تطبيق الأندرويد)
+def _der_len(n):
+    if n < 0x80:
+        return bytes([n])
+    b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([0x80 | len(b)]) + b
+
+
+def _der_int(v):
+    b = v.to_bytes(v.bit_length() // 8 + 1, "big")
+    return b"\x02" + _der_len(len(b)) + b
+
+
+def _java_bytes(arr):
+    return bytes((x + 256) % 256 for x in arr)
+
+
+def clean_webos_pem(pem, passphrase):
+    """يفك مفتاح الشاشة بأدوات جافا ويعيد كتابته بترميز سليم بدون تشفير (لـ JSch)."""
+    import base64
+    import hashlib
+    from java import jclass
+    lines = [l.strip() for l in pem.strip().splitlines()]
+    headers, body = {}, []
+    for l in lines[1:-1]:
+        if ":" in l:
+            k, v = l.split(":", 1)
+            headers[k.strip()] = v.strip()
+        elif l:
+            body.append(l)
+    data = base64.b64decode("".join(body))
+    dek = headers.get("DEK-Info")
+    if dek:
+        name, iv_hex = [x.strip() for x in dek.split(",")]
+        iv = bytes.fromhex(iv_hex)
+        size = {"AES-128-CBC": 16, "AES-192-CBC": 24, "AES-256-CBC": 32, "DES-EDE3-CBC": 24}.get(name)
+        if not size:
+            raise ValueError("تشفير غير مدعوم: " + name)
+        pw, key, prev = passphrase.encode(), b"", b""
+        while len(key) < size:
+            prev = hashlib.md5(prev + pw + iv[:8]).digest()
+            key += prev
+        key = key[:size]
+        Cipher = jclass("javax.crypto.Cipher")
+        Spec = jclass("javax.crypto.spec.SecretKeySpec")
+        IvSpec = jclass("javax.crypto.spec.IvParameterSpec")
+        algo = "AES" if name.startswith("AES") else "DESede"
+        c = Cipher.getInstance(algo + "/CBC/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, Spec(key, algo), IvSpec(iv))
+        plain = _java_bytes(c.doFinal(data))
+        pad = plain[-1]
+        if not 1 <= pad <= len(iv) or plain[-pad:] != bytes([pad]) * pad:
+            raise ValueError("الـ Passphrase لا تطابق المفتاح")
+        data = plain[:-pad]
+    ints = _der_ints(data)
+    if len(ints) >= 9:
+        ints = ints[1:]
+    n, e, d, p, q = ints[:5]
+    if p * q != n:
+        raise ValueError("المفتاح بعد فكه غير سليم")
+    vals = [0, n, e, d, p, q, d % (p - 1), d % (q - 1), pow(q, -1, p)]
+    body = b"".join(_der_int(v) for v in vals)
+    der = b"\x30" + _der_len(len(body)) + body
+    b64 = base64.b64encode(der).decode()
+    return "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(b64[i:i + 64] for i in range(0, len(b64), 64)) + \
+           "\n-----END RSA PRIVATE KEY-----\n"
+
+
+def _jsch_session(ip, mode, secret):
+    from java import jclass
+    JSch = jclass("com.jcraft.jsch.JSch")
+    jsch = JSch()
+    if mode == "root":
+        session = jsch.getSession("root", ip, 22)
+        session.setPassword(secret or "alpine")
+    else:
+        try:
+            pem = http_get("http://%s:9991/webos_rsa" % ip, 5).decode()
+        except Exception:
+            raise RuntimeError("ما قدرت أجيب مفتاح الشاشة. افتح تطبيق Developer Mode في الشاشة "
+                               "وفعّل Key Server ثم حاول مرة ثانية.")
+        if "PRIVATE KEY" not in pem:
+            raise RuntimeError("الشاشة رجّعت شيء غير المفتاح. أطفئ Key Server وشغّله من جديد.")
+        try:
+            clean = clean_webos_pem(pem, secret.strip())
+        except Exception as e:
+            raise RuntimeError("ما قدرت أفتح مفتاح الشاشة بالـ Passphrase هذي (%s)." % e)
+        jsch.addIdentity("webos", clean.encode(), None, None)
+        session = jsch.getSession("prisoner", ip, 9922)
+    session.setConfig("StrictHostKeyChecking", "no")
+    session.setConfig("server_host_key", "ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256,ssh-rsa")
+    session.setConfig("PubkeyAcceptedAlgorithms", "rsa-sha2-512,rsa-sha2-256,ssh-rsa")
+    session.setConfig("kex", str(JSch.getConfig("kex")) +
+                      ",diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1,diffie-hellman-group1-sha1")
+    session.connect(15000)
+    return session
+
+
+def _jsch_exec(session, cmd, data=None, until=None, timeout=60):
+    from java import jarray
+    ch = session.openChannel("exec")
+    ch.setCommand(cmd)
+    ins, err = ch.getInputStream(), ch.getErrStream()
+    outs = ch.getOutputStream() if data is not None else None
+    ch.connect(15000)
+    if data is not None:
+        for i in range(0, len(data), 65536):
+            outs.write(data[i:i + 65536])
+        outs.flush()
+        outs.close()
+    buf, end, jb = bytearray(), time.time() + timeout, jarray("B")(8192)
+    while time.time() < end:
+        got = False
+        for st in (ins, err):
+            while st.available() > 0:
+                n = st.read(jb, 0, 8192)
+                if n <= 0:
+                    break
+                buf.extend(_java_bytes(jb[:n]))
+                got = True
+        if until and until(buf.decode("utf-8", "ignore")):
+            break
+        if ch.isClosed() and ins.available() == 0 and err.available() == 0:
+            break
+        if not got:
+            time.sleep(0.2)
+    status = ch.getExitStatus() if ch.isClosed() else -1
+    ch.disconnect()
+    return buf.decode("utf-8", "ignore"), status
+
+
+def lg_install_jsch(ip, data, filename, mode, secret):
+    log = []
+    session = _jsch_session(ip, mode, secret)
+    try:
+        log.append("تم الاتصال بالشاشة (%s)." % ("روت" if mode == "root" else "وضع المطور"))
+        folder = "/tmp" if mode == "root" else "/media/developer/temp"
+        remote = folder + "/tvm_upload.ipk"
+        _jsch_exec(session, "mkdir -p %s" % folder)
+        _, st = _jsch_exec(session, "cat > %s" % remote, data=data, timeout=300)
+        if st not in (0, -1):
+            raise RuntimeError("فشل رفع الملف إلى الشاشة (قد تكون المساحة ممتلئة).")
+        log.append("تم رفع %s (%.1f ميجا)." % (filename, len(data) / 1048576))
+        luna = "luna-send" if mode == "root" else "luna-send-pub"
+        payload = json.dumps({"id": "com.ares.defaultName", "ipkUrl": remote, "subscribe": True})
+        done = lambda t: '"installed"' in t.lower() or "fail" in t.lower() or '"returnvalue": false' in t.lower()
+        buf, _ = _jsch_exec(session, "%s -i -f luna://com.webos.appInstallService/dev/install '%s'" % (luna, payload),
+                            until=done, timeout=180)
+        ok = '"installed"' in buf.lower()
+        states = re.findall(r'"state"\s*:\s*"([^"]+)"', buf)
+        errors = re.findall(r'"errorText"\s*:\s*"([^"]+)"', buf)
+        if states:
+            log.append("حالة التثبيت: " + " ← ".join(dict.fromkeys(states)))
+        if errors:
+            log.append("الخطأ: " + errors[-1])
+        if not states and not errors:
+            log.append(buf[-1500:] or "لم يصل رد من الشاشة.")
+        _jsch_exec(session, "rm -f %s" % remote)
+        return ok, log
+    finally:
+        session.disconnect()
+
+
 def lg_install(ip, data, filename, mode, secret):
+    if paramiko is None and _jsch_ok():
+        return lg_install_jsch(ip, data, filename, mode, secret)
     log = []
     client = _lg_ssh(ip, mode, secret)
     try:
@@ -982,7 +1161,8 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 "sdb": bool(find_sdb()),
                 "tizen": bool(find_tizen()),
                 "countries": [[c[0], [x[0] for x in c[3]]] for c in screen.COUNTRIES],
-                "paramiko": paramiko is not None,
+                "paramiko": paramiko is not None or _jsch_ok(),
+                "paramikoErr": PARAMIKO_ERR,
                 "os": sys.platform,
                 "android": IS_ANDROID,
             })
@@ -1471,7 +1651,9 @@ function render() {
         ${samsungState(d)}<div class="state warn">التثبيت على شاشات تايزن (سامسونج) يحتاج أدوات سامسونج، ويتم من برنامج الكمبيوتر.</div></div></article>`;
     const needs = sam
       ? (INFO.sdb ? '' : '<div class="state warn">للتثبيت على سامسونج لازم Tizen Studio (أداة sdb) على هذا الكمبيوتر.</div>')
-      : (INFO.paramiko ? '' : '<div class="state warn">للتثبيت على LG نفّذ على الكمبيوتر: <span dir="ltr">pip install paramiko</span> ثم أعد تشغيل البرنامج.</div>');
+      : (INFO.paramiko ? '' : (INFO.android
+          ? `<div class="state warn">مكتبة الاتصال بالشاشة ما اشتغلت في التطبيق. أرسل هذي الرسالة للمطوّر: <span dir="ltr">${esc(INFO.paramikoErr)}</span></div>`
+          : '<div class="state warn">للتثبيت على LG نفّذ على الكمبيوتر: <span dir="ltr">pip install paramiko</span> ثم أعد تشغيل البرنامج.</div>'));
     const lgFields = sam ? '' : `<div class="row">
         <select id="mode${i}" aria-label="طريقة الاتصال"><option value="dev">وضع المطور</option><option value="root"${d.rooted && !d.devMode ? ' selected' : ''}>روت</option></select>
         <input id="secret${i}" placeholder="Passphrase أو كلمة مرور الروت" style="direction:ltr" autocomplete="off">
