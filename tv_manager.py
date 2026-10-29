@@ -40,6 +40,7 @@ except ImportError:
 import tv_screen_app as screen
 
 APP_PORT = 8765
+IS_ANDROID = bool(os.environ.get("TVM_ANDROID")) or hasattr(sys, "getandroidapilevel")
 HOME = os.path.expanduser("~")
 CONFIG_PATH = os.path.join(HOME, ".tv_manager.json")
 EXTRA_LIST_PATH = os.path.join(HOME, ".tv_manager_blocklist.txt")
@@ -318,6 +319,41 @@ def find_adb(download=True, log=None):
     return exe
 
 
+def _use_py_adb():
+    """على الجوال ما فيه أداة adb، فنتكلم مع الشاشة ببروتوكول ADB مكتوب بالبايثون (adb-shell)."""
+    if IS_ANDROID:
+        return True
+    try:
+        return find_adb(download=False) is None and __import__("adb_shell") is not None
+    except Exception:
+        return False
+
+
+def _py_adb(ip, port, log):
+    try:
+        from adb_shell.adb_device import AdbDeviceTcp
+        from adb_shell.auth.keygen import keygen
+        from adb_shell.auth.sign_pythonrsa import PythonRSASigner
+    except ImportError:
+        raise RuntimeError("مكتبة adb-shell غير موجودة في هذا الإصدار.")
+    os.makedirs(ADB_DIR, exist_ok=True)
+    key = os.path.join(ADB_DIR, "adbkey")
+    if not (os.path.isfile(key) and os.path.isfile(key + ".pub")):
+        keygen(key)
+    with open(key) as f:
+        priv = f.read()
+    with open(key + ".pub") as f:
+        pub = f.read()
+    dev = AdbDeviceTcp(ip, int(port or 5555), default_transport_timeout_s=10.0)
+    log.append("أتصل بالشاشة %s:%s… إذا ظهرت عليها رسالة «السماح بتصحيح الأخطاء» اختر «السماح دائماً»." % (ip, port or 5555))
+    try:
+        dev.connect(rsa_keys=[PythonRSASigner(pub, priv)], auth_timeout_s=45)
+    except Exception as e:
+        raise RuntimeError("ما قدرت أتصل (%s). تأكد إن «تصحيح أخطاء USB» أو «تصحيح الأخطاء عبر الشبكة» مفعّل، "
+                           "واختر «السماح» في الرسالة اللي تظهر على الشاشة خلال ٤٥ ثانية." % e)
+    return dev
+
+
 def android_connect(ip, port, log):
     adb = find_adb(log=log)
     target = "%s:%s" % (ip, port or 5555)
@@ -336,6 +372,9 @@ def android_connect(ip, port, log):
 
 def android_pair(ip, port, code):
     log = []
+    if _use_py_adb():
+        raise RuntimeError("الإقران برمز غير مدعوم من الجوال. فعّل «تصحيح أخطاء USB» في الشاشة، وغالباً تقبل الاتصال "
+                           "مباشرة على المنفذ 5555 بدون إقران.")
     adb = find_adb(log=log)
     out = _run([adb, "pair", "%s:%s" % (ip, port), code], 30)
     log.append(out)
@@ -344,6 +383,28 @@ def android_pair(ip, port, code):
 
 def android_install(ip, port, data, filename):
     log = []
+    if _use_py_adb():
+        dev = _py_adb(ip, port, log)
+        fd, path = tempfile.mkstemp(suffix=".apk")
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        try:
+            remote = "/data/local/tmp/tvm_upload.apk"
+            log.append("أرفع %s (%.1f ميجا)…" % (filename, len(data) / 1048576))
+            dev.push(path, remote, read_timeout_s=600)
+            out = dev.shell("pm install -r " + remote, read_timeout_s=600)
+            dev.shell("rm -f " + remote)
+            log.append(str(out).strip())
+            return "success" in str(out).lower(), log
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
+            try:
+                os.remove(path)
+            except OSError:
+                pass
     adb, target = android_connect(ip, port, log)
     fd, path = tempfile.mkstemp(suffix=".apk")
     with os.fdopen(fd, "wb") as f:
@@ -361,6 +422,22 @@ def android_install(ip, port, data, filename):
 
 def android_adblock(ip, port, enable):
     log = []
+    if _use_py_adb():
+        dev = _py_adb(ip, port, log)
+        try:
+            if enable:
+                dev.shell("settings put global private_dns_mode hostname")
+                dev.shell("settings put global private_dns_specifier " + PRIVATE_DNS)
+            else:
+                dev.shell("settings put global private_dns_mode off")
+            mode = str(dev.shell("settings get global private_dns_mode")).strip()
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
+        log.append("وضع DNS الحالي: " + mode)
+        return ((mode == "hostname") if enable else (mode in ("off", "opportunistic", "null"))), log
     adb, target = android_connect(ip, port, log)
     if enable:
         cmds = [["settings", "put", "global", "private_dns_mode", "hostname"],
@@ -907,6 +984,7 @@ class Panel(http.server.BaseHTTPRequestHandler):
                 "countries": [[c[0], [x[0] for x in c[3]]] for c in screen.COUNTRIES],
                 "paramiko": paramiko is not None,
                 "os": sys.platform,
+                "android": IS_ANDROID,
             })
         if u.path == "/api/dns":
             return self._json(DNS.status())
@@ -1172,13 +1250,13 @@ pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-ra
         <span class="muted" id="photoNote"></span>
       </div>
     </div>
-    <div class="row" style="margin-top:.8rem">
+    <div class="row pc-only" style="margin-top:.8rem">
       <button onclick="downloadScreen('lg')">حمّل ملف LG (‎.ipk)</button>
       <button onclick="downloadScreen('samsung')">حمّل ملفات سامسونج (غير موقّعة)</button>
     </div>
   </section>
 
-  <section>
+  <section class="pc-only">
     <div class="head">
       <div>
         <h2>حجب الإعلانات</h2>
@@ -1225,7 +1303,7 @@ pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-ra
     </details>
   </section>
 
-  <section>
+  <section class="pc-only">
     <h2>افتح اللوحة من الجوال</h2>
     <div class="phone">
       <div id="qr"></div>
@@ -1257,6 +1335,10 @@ const $ = id => document.getElementById(id);
 
 async function loadInfo() {
   INFO = await api('/api/info');
+  if (INFO.android) {
+    document.querySelectorAll('.pc-only').forEach(el => el.style.display = 'none');
+    document.body.classList.add('is-android');
+  }
   $('pcIp').textContent = INFO.ip || '—';
   $('phoneUrl').textContent = INFO.phoneUrl || '';
   $('screenCountry').innerHTML = (INFO.countries || []).map((c, i) => `<option value="${i}">${esc(c[0])}</option>`).join('');
@@ -1307,6 +1389,18 @@ function face(d) {
         <small>${esc(d.model)}<br>${esc(d.ip)} · ${esc(d.os)}</small>
       </div>`;
 }
+function cardAndroidPhone(d, i) {
+  return `<article class="tv android">
+      ${face(d)}
+      <div class="body">
+        <div class="state warn">تثبيت التطبيقات على شاشات أندرويد يتم من برنامج الكمبيوتر.</div>
+        <details open><summary>منع الإعلانات بشكل دائم على هذي الشاشة</summary><ol>
+          <li>الإعدادات ← الشبكة والإنترنت ← DNS الخاص (Private DNS).</li>
+          <li>اختر «اسم مضيف مزوّد DNS الخاص» واكتب: <b dir="ltr">dns.adguard-dns.com</b> واحفظ.</li>
+          <li>إذا ما لقيت الخيار في الشاشة، شغّل برنامج الكمبيوتر وفيه زر يفعّله بضغطة.</li></ol></details>
+      </div>
+    </article>`;
+}
 function cardAndroid(d, i) {
   return `<article class="tv android">
       ${face(d)}
@@ -1318,11 +1412,12 @@ function cardAndroid(d, i) {
           <li>ارجع للإعدادات ← خيارات المطوّر، وفعّل «تصحيح أخطاء USB» و«تصحيح الأخطاء عبر الشبكة» إن وجد.</li>
           <li>في قوقل تي في الأحدث: فعّل «تصحيح الأخطاء اللاسلكي»، ثم «إقران جهاز برمز»، واكتب المنفذ والرمز الظاهرين تحت.</li>
           <li>أول اتصال تطلع رسالة على الشاشة: اختر «السماح دائماً من هذا الكمبيوتر».</li></ol></details>
+        ${INFO.android ? '<p class="muted" style="font-size:.88rem">من الجوال يكون الاتصال على المنفذ 5555 (بدون رمز إقران).</p>' : ''}
         <div class="row">
           <label>منفذ الاتصال <input id="aport${i}" value="5555" style="direction:ltr;width:6rem" autocomplete="off"></label>
-          <label>منفذ الإقران <input id="ppport${i}" placeholder="اختياري" style="direction:ltr;width:6rem" autocomplete="off"></label>
+          ${INFO.android ? '' : `<label>منفذ الإقران <input id="ppport${i}" placeholder="اختياري" style="direction:ltr;width:6rem" autocomplete="off"></label>
           <label>رمز الإقران <input id="pcode${i}" placeholder="اختياري" style="direction:ltr;width:7rem" autocomplete="off"></label>
-          <button onclick="androidPair(${i})">اقترن</button>
+          <button onclick="androidPair(${i})">اقترن</button>`}
         </div>
         <div class="row">
           <input type="file" id="file${i}" accept=".apk" aria-label="ملف التطبيق">
@@ -1372,6 +1467,8 @@ function render() {
     if (d.brand === 'android') return cardAndroid(d, i);
     if (d.brand === 'other') return cardOther(d, i);
     const sam = d.brand === 'samsung';
+    if (sam && INFO.android) return `<article class="tv samsung">${face(d)}<div class="body">
+        ${samsungState(d)}<div class="state warn">التثبيت على شاشات تايزن (سامسونج) يحتاج أدوات سامسونج، ويتم من برنامج الكمبيوتر.</div></div></article>`;
     const needs = sam
       ? (INFO.sdb ? '' : '<div class="state warn">للتثبيت على سامسونج لازم Tizen Studio (أداة sdb) على هذا الكمبيوتر.</div>')
       : (INFO.paramiko ? '' : '<div class="state warn">للتثبيت على LG نفّذ على الكمبيوتر: <span dir="ltr">pip install paramiko</span> ثم أعد تشغيل البرنامج.</div>');
@@ -1453,7 +1550,7 @@ function fillCities() {
   $('screenCity').innerHTML = c ? c[1].map((n, i) => `<option value="${i}">${esc(n)}</option>`).join('') : '';
 }
 async function previewScreen() {
-  const w = window.open('', '_blank');
+  const w = INFO.android ? null : window.open('', '_blank');
   const f = feats();
   const url = '/screen-preview?k=' + encodeURIComponent(K) + '&country=' + screenCountry() + '&city=' + screenCity() +
     Object.keys(f).map(k => '&' + k + '=' + (k === 'reciter' ? encodeURIComponent(f[k]) : (f[k] ? 1 : 0))).join('');
@@ -1465,7 +1562,7 @@ async function previewScreen() {
     await photoCount();
     if (j.log) $('photoNote').textContent += ' ' + j.log[j.log.length - 1];
   }
-  if (w) w.location = url; else window.open(url, '_blank');
+  if (w) w.location = url; else if (INFO.android) location.href = url; else window.open(url, '_blank');
 }
 async function downloadScreen(brand) {
   const r = await fetch('/api/screen/package', {method: 'POST', headers: {'X-Key': K}, body: JSON.stringify({brand, country: screenCountry(), city: screenCity(), features: feats()})});
@@ -1612,6 +1709,15 @@ def main():
     finally:
         DNS.stop()
         server.server_close()
+
+
+def start_background():
+    """لتطبيق الأندرويد: يشغّل اللوحة داخل الجوال ويرجّع رابطها لعرضه في التطبيق."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", APP_PORT), Panel)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=lambda: (screen.bukhari_hadiths(), screen.fetch_stock_photos([], only_if_empty=True)),
+                     daemon=True).start()
+    return "http://127.0.0.1:%d/?k=%s" % (APP_PORT, TOKEN)
 
 
 if __name__ == "__main__":
