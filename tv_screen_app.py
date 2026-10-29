@@ -176,10 +176,16 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;col
 #verse.hadith{font-size:1.9vw}
 
 #credit{position:fixed;bottom:.9vh;left:4vw;font-size:.8vw;opacity:.6;direction:rtl;text-align:left;max-width:70vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#qbar{position:fixed;top:4.6vh;left:50%;-webkit-transform:translateX(-50%);transform:translateX(-50%);display:none;
+  background:rgba(14,12,9,.55);border:1px solid rgba(217,180,106,.35);border-radius:3vw;padding:.55vw 1.5vw;font-size:1.15vw;white-space:nowrap;text-shadow:none}
+#qbar b{color:#d9b46a;font-weight:600;margin-left:.6vw}
+#qbar .eq{display:inline-block;width:1.1vw;text-align:center;color:#d9b46a;margin-left:.5vw}
+#qbar.on .eq{-webkit-animation:pulse 1.4s ease-in-out infinite;animation:pulse 1.4s ease-in-out infinite}
+@-webkit-keyframes pulse{50%{opacity:.35}}@keyframes pulse{50%{opacity:.35}}
 #hint{position:fixed;top:1.4vh;left:0;right:0;text-align:center;font-size:1vw;opacity:.7;-webkit-transition:opacity 2s;transition:opacity 2s}
 #picker{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(5,6,10,.9)}
 #picker h2{font-size:2.2vw;font-weight:600;text-align:center;margin:6vh 0 2.5vh;color:#d9b46a}
-#list{width:32vw;height:70vh;margin:0 auto;overflow:hidden;position:relative}
+#list{width:42vw;height:70vh;margin:0 auto;overflow:hidden;position:relative}
 #list div{font-size:1.8vw;padding:.65vw 1.4vw;border-radius:.7vw;border:.15vw solid transparent}
 #list div.sel{border-color:#d9b46a;color:#d9b46a;background:rgba(217,180,106,.08)}
 </style>
@@ -204,7 +210,9 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;col
 </div>
 <div id="credit"></div>
 <video id="keep" muted loop playsinline autoplay style="position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none"></video>
-<div id="hint">اضغط OK لتغيير الدولة والمدينة</div>
+<div id="qbar"><span class="eq" id="qIcon">▶</span><b>القرآن الكريم</b><span id="qText"></span></div>
+<audio id="qa" preload="none"></audio>
+<div id="hint">اضغط OK للقائمة</div>
 <div id="picker"><h2 id="pickTitle">اختر دولتك</h2><div id="list"></div></div>
 <script src="$WEBAPIS/webapis/webapis.js"></script>
 <script>
@@ -538,13 +546,56 @@ function drift(){
   $('ui').style.webkitTransform = t; $('ui').style.transform = t;
 }
 
-function pickItems(){ return pickMode === 'country' ? CFG.countries : CFG.countries[pickCountry][3]; }
+/* القرآن الكريم */
+var Q = CFG.quran, qPlaying = false, qMode = sget('qmode') || 'cont', qIdx = 0;
+if (Q){ var qs = sget('qsurah'); qIdx = Math.max(0, Q.surahs.indexOf(qs)); }
+function sName(n){ return (Q && Q.names && Q.names[n]) ? 'سورة ' + Q.names[n] : 'سورة ' + ar(n); }
+function qUrl(n){ return Q.server + (n < 10 ? '00' : n < 100 ? '0' : '') + n + '.mp3'; }
+function qPaint(){
+  if (!Q) return;
+  $('qbar').style.display = 'block';
+  $('qbar').className = qPlaying ? 'on' : '';
+  $('qIcon').innerHTML = qPlaying ? '♪' : '▶';
+  $('qText').innerHTML = Q.name + ' · ' + sName(Q.surahs[qIdx]) + (qMode === 'cont' ? ' · متواصل' : '');
+}
+function qPlay(){
+  if (!Q) return;
+  var a = $('qa'), u = qUrl(Q.surahs[qIdx]);
+  if (a.getAttribute('data-src') !== u){ a.src = u; a.setAttribute('data-src', u); }
+  try { var pr = a.play(); if (pr && pr['catch']) pr['catch'](function(){ qPlaying = false; qPaint(); }); } catch(e){}
+  qPlaying = true; sset('qsurah', Q.surahs[qIdx]); qPaint();
+}
+function qPause(){ try { $('qa').pause(); } catch(e){} qPlaying = false; qPaint(); }
+function qToggle(){ if (qPlaying) qPause(); else qPlay(); }
+function qStep(d){ if (!Q) return; qIdx = (qIdx + d + Q.surahs.length) % Q.surahs.length; if (qPlaying) qPlay(); else { sset('qsurah', Q.surahs[qIdx]); qPaint(); } }
+$('qa').addEventListener('ended', function(){
+  if (qMode === 'cont'){ qIdx = (qIdx + 1) % Q.surahs.length; qPlay(); } else { qPlaying = false; qPaint(); }
+});
+$('qa').addEventListener('error', function(){ if (qPlaying){ qPlaying = false; qPaint(); } });
+
+function menuItems(){
+  var m = [];
+  if (Q){
+    m.push([qPlaying ? '⏸  إيقاف القراءة' : '▶  تشغيل القراءة', 'toggle']);
+    m.push(['اختيار السورة  (' + sName(Q.surahs[qIdx]) + ')', 'surah']);
+    m.push(['طريقة التشغيل: ' + (qMode === 'cont' ? 'متواصل (سورة بعد سورة)' : 'سورة واحدة'), 'mode']);
+  }
+  m.push(['تغيير الدولة والمدينة', 'city']);
+  return m;
+}
+function pickItems(){
+  if (pickMode === 'menu') return menuItems();
+  if (pickMode === 'surah'){ var o = []; for (var i = 0; i < Q.surahs.length; i++) o.push([ar(Q.surahs[i]) + '. ' + sName(Q.surahs[i])]); return o; }
+  return pickMode === 'country' ? CFG.countries : CFG.countries[pickCountry][3];
+}
+function openMenu(){ picking = true; pickMode = 'menu'; sel = 0; renderPicker(); $('picker').style.display = 'block'; }
 function openPicker(){ picking = true; pickMode = 'country'; sel = loc[0]; renderPicker(); $('picker').style.display = 'block'; }
 function renderPicker(){
   var items = pickItems(), html = '';
   for (var i = 0; i < items.length; i++) html += '<div id="c' + i + '">' + items[i][0] + '</div>';
   $('list').innerHTML = html;
-  $('pickTitle').innerHTML = pickMode === 'country' ? 'اختر دولتك' : 'اختر مدينتك في ' + CFG.countries[pickCountry][0];
+  $('pickTitle').innerHTML = pickMode === 'menu' ? 'القائمة' : pickMode === 'surah' ? 'اختر السورة' :
+    pickMode === 'country' ? 'اختر دولتك' : 'اختر مدينتك في ' + CFG.countries[pickCountry][0];
   paintPicker();
 }
 function paintPicker(){
@@ -555,6 +606,14 @@ function paintPicker(){
 }
 function closePicker(){ picking = false; $('picker').style.display = 'none'; }
 function choose(){
+  if (pickMode === 'menu'){
+    var act = menuItems()[sel][1];
+    if (act === 'toggle'){ closePicker(); qToggle(); return; }
+    if (act === 'mode'){ qMode = qMode === 'cont' ? 'one' : 'cont'; sset('qmode', qMode); qPaint(); renderPicker(); return; }
+    if (act === 'surah'){ pickMode = 'surah'; sel = qIdx; renderPicker(); return; }
+    if (act === 'city'){ pickMode = 'country'; sel = loc[0]; renderPicker(); return; }
+  }
+  if (pickMode === 'surah'){ qIdx = sel; closePicker(); qPlay(); return; }
   if (pickMode === 'country'){
     pickCountry = sel; pickMode = 'city'; sel = pickCountry === loc[0] ? loc[1] : 0;
     if (CFG.countries[pickCountry][3].length > 1){ renderPicker(); return; }
@@ -576,16 +635,26 @@ document.addEventListener('keydown', function(e){
     if (k === 38){ sel = (sel - 1 + len) % len; paintPicker(); }
     else if (k === 40){ sel = (sel + 1) % len; paintPicker(); }
     else if (k === 13) choose();
-    else if (back){ if (pickMode === 'city'){ pickMode = 'country'; sel = pickCountry; renderPicker(); } else closePicker(); }
+    else if (back){
+      if (pickMode === 'city'){ pickMode = 'country'; sel = pickCountry; renderPicker(); }
+      else if (pickMode === 'surah' || (pickMode === 'country' && Q)){ pickMode = 'menu'; sel = 0; renderPicker(); }
+      else closePicker();
+    }
     e.preventDefault(); return;
   }
   if (k === 39 || k === 40){ setBg(bgIdx + 1); e.preventDefault(); }
   else if (k === 37 || k === 38){ setBg(bgIdx - 1); e.preventDefault(); }
-  else if (k === 13){ openPicker(); e.preventDefault(); }
+  else if (k === 13){ if (Q) openMenu(); else openPicker(); e.preventDefault(); }
+  else if (Q && (k === 415 || k === 10252 || k === 179)){ qToggle(); e.preventDefault(); }
+  else if (Q && (k === 19 || k === 413)){ qPause(); e.preventDefault(); }
+  else if (Q && (k === 417 || k === 427 || k === 33)){ qStep(1); e.preventDefault(); }
+  else if (Q && (k === 412 || k === 428 || k === 34)){ qStep(-1); e.preventDefault(); }
   else if (back && k !== 8){ exitApp(); e.preventDefault(); }
 });
 
 $('stars').innerHTML = CFG.stars;
+try { if (window.tizen && tizen.tvinputdevice){ ['MediaPlayPause','MediaPlay','MediaPause','MediaStop','MediaFastForward','MediaRewind','ChannelUp','ChannelDown'].forEach(function(n){ try { tizen.tvinputdevice.registerKey(n); } catch(e){} }); } } catch(e){}
+if (Q) qPaint(); else $('hint').innerHTML = 'اضغط OK لتغيير الدولة والمدينة';
 if (!F.weather) document.querySelector('.wx').style.display = 'none';
 if (!F.matches){ document.querySelector('.matches').style.display = 'none'; loadMatches = function(){}; }
 buildBg(); setBg(bgIdx);
@@ -945,7 +1014,87 @@ def _loc(country=0, city=0):
     return [country, city]
 
 
-FEATURES = ("verses", "hadith", "matches", "weather")
+# ---------------------------------------------------------------- القرآن الكريم (mp3quran.net)
+MP3Q_RECITERS = "https://www.mp3quran.net/api/v3/reciters?language=ar"
+MP3Q_SUWAR = "https://www.mp3quran.net/api/v3/suwar?language=ar"
+MP3Q_CACHE = os.path.join(os.path.expanduser("~"), ".tv_manager_mp3quran.json")
+_MP3Q_LOCK = threading.Lock()
+
+
+def _mp3q_load(log=None):
+    """يحمّل قائمة القرّاء وأسماء السور مرة كل أسبوع ويخزنها على الكمبيوتر."""
+    import time as _t
+    import urllib.request
+    with _MP3Q_LOCK:
+        cache = {}
+        try:
+            with open(MP3Q_CACHE, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+        except Exception:
+            pass
+        if cache.get("reciters") and cache.get("suwar") and _t.time() - cache.get("at", 0) < 7 * 86400:
+            return cache
+        try:
+            def fetch(u):
+                req = urllib.request.Request(u, headers={"User-Agent": "TVManager/1.4"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return json.loads(r.read().decode("utf-8"))
+            rec = fetch(MP3Q_RECITERS).get("reciters", [])
+            suw = fetch(MP3Q_SUWAR).get("suwar", [])
+            items = []
+            for r in rec:
+                for m in r.get("moshaf", []):
+                    srv = str(m.get("server", ""))
+                    if not srv.startswith("https://") or "mp3quran.net" not in srv:
+                        continue
+                    try:
+                        surahs = [int(x) for x in str(m.get("surah_list", "")).split(",") if x.strip()]
+                    except ValueError:
+                        continue
+                    if surahs:
+                        items.append({"id": int(m.get("id", 0)), "label": "%s — %s" % (r.get("name", ""), m.get("name", "")),
+                                      "server": srv if srv.endswith("/") else srv + "/", "surahs": surahs})
+            items.sort(key=lambda x: x["label"])
+            names = [""] * 115
+            for x in suw:
+                try:
+                    names[int(x.get("id"))] = str(x.get("name", "")).strip()
+                except Exception:
+                    pass
+            if items:
+                cache = {"at": _t.time(), "reciters": items, "suwar": names}
+                with open(MP3Q_CACHE, "w", encoding="utf-8") as f:
+                    json.dump(cache, f, ensure_ascii=False)
+        except Exception as e:
+            if log is not None:
+                log.append("ما قدرت أحمّل قائمة القرّاء من mp3quran: %s" % e)
+        return cache
+
+
+def quran_reciters(log=None):
+    return _mp3q_load(log).get("reciters", [])
+
+
+def quran_config(reciter_id=None, log=None):
+    data = _mp3q_load(log)
+    recs = data.get("reciters", [])
+    if not recs:
+        return None
+    pick = None
+    try:
+        rid = int(reciter_id) if reciter_id not in (None, "") else None
+    except ValueError:
+        rid = None
+    if rid is not None:
+        pick = next((r for r in recs if r["id"] == rid), None)
+    if pick is None:   # الافتراضي: مشاري العفاسي (حفص) إن وجد
+        pick = next((r for r in recs if "العفاسي" in r["label"] and "حفص" in r["label"]), None) or recs[0]
+    names = data.get("suwar") or []
+    return {"name": pick["label"].split(" — ")[0], "full": pick["label"], "server": pick["server"],
+            "surahs": pick["surahs"], "names": names if len(names) == 115 else []}
+
+
+FEATURES = ("verses", "hadith", "matches", "weather", "quran")
 
 
 def _features(f):
@@ -966,6 +1115,7 @@ def page(country=0, city=0, photo_base="photos/", photo_suffix="", log=None, kee
                     photo_meta(n).get("credit", "")] for n in photo_names()],
         "mix": False,
         "hadith": bukhari_hadiths(log) if feats["hadith"] else [],
+        "quran": quran_config((features or {}).get("reciter"), log) if feats["quran"] else None,
         "keep": keep_src,
     }
     data = json.dumps(cfg, ensure_ascii=False).replace("</", "<\\/")

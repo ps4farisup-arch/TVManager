@@ -173,9 +173,40 @@ def read_description(url):
     return out
 
 
+TV_MAKERS = {
+    "samsung": "Samsung", "lg electronics": "LG", "lge": "LG", "sony": "Sony", "tcl": "TCL", "hisense": "Hisense",
+    "xiaomi": "Xiaomi", "toshiba": "Toshiba", "philips": "Philips", "tpvision": "Philips", "tp vision": "Philips",
+    "panasonic": "Panasonic", "sharp": "Sharp", "skyworth": "Skyworth", "haier": "Haier", "konka": "Konka",
+    "changhong": "Changhong", "nikai": "Nikai", "kmc": "KMC", "wansa": "Wansa", "geepas": "Geepas",
+    "aiwa": "Aiwa", "jvc": "JVC", "rca": "RCA", "hyundai": "Hyundai", "vestel": "Vestel", "nokia": "Nokia",
+    "realme": "Realme", "oneplus": "OnePlus", "vizio": "Vizio", "grundig": "Grundig", "loewe": "Loewe",
+    "amazon": "Amazon Fire TV", "google": "Google TV",
+}
+
+
+def _maker(*texts):
+    blob = " ".join(t or "" for t in texts).lower()
+    for k, v in TV_MAKERS.items():
+        if k in blob:
+            return v
+    return ""
+
+
+def _ssdp_info(ip, headers=None):
+    headers = list(headers or [])
+    if not headers:
+        headers = ssdp_discover(1.5, target=ip).get(ip, [])
+    blob = " ".join(" ".join(h.values()) for h in headers).lower()
+    loc = next((h["location"] for h in headers if h.get("location")), None)
+    desc = read_description(loc) if loc else {}
+    return blob, desc
+
+
 def probe_samsung(ip):
+    """أي شاشة تايزن (سامسونج أو الشركات اللي ترخّص النظام منها)."""
     try:
-        info = json.loads(http_get("http://%s:8001/api/v2/" % ip, 2))
+        raw = http_get("http://%s:8001/api/v2/" % ip, 2)
+        info = json.loads(raw)
     except Exception:
         return None
     d = info.get("device") or {}
@@ -184,7 +215,8 @@ def probe_samsung(ip):
     return {
         "ip": ip,
         "brand": "samsung",
-        "name": d.get("name") or info.get("name") or "Samsung TV",
+        "maker": "Samsung" if b"samsung" in raw.lower() else (_maker(d.get("name", "")) or "Tizen TV"),
+        "name": d.get("name") or info.get("name") or "Tizen TV",
         "model": d.get("modelName", ""),
         "os": d.get("OS", "Tizen"),
         "devMode": str(d.get("developerMode", "0")) == "1",
@@ -192,26 +224,38 @@ def probe_samsung(ip):
     }
 
 
-def probe_lg(ip, headers=None):
-    headers = list(headers or [])
-    if not headers:
-        headers = ssdp_discover(1.5, target=ip).get(ip, [])
-    blob = " ".join(" ".join(h.values()) for h in headers).lower()
-    loc = next((h["location"] for h in headers if h.get("location")), None)
-    desc = read_description(loc) if loc else {}
-    is_lg = ("webos" in blob or "lge-com" in blob
-             or "lg electronics" in desc.get("manufacturer", "").lower())
-    if not is_lg:
-        return None
-    return {
-        "ip": ip,
-        "brand": "lg",
-        "name": desc.get("friendlyName") or "LG TV",
-        "model": desc.get("modelName") or desc.get("modelNumber", ""),
-        "os": "webOS",
-        "devMode": port_open(ip, 9922),
-        "rooted": port_open(ip, 22),
-    }
+def _eureka_name(ip):
+    try:
+        j = json.loads(http_get("http://%s:8008/setup/eureka_info?options=detail" % ip, 2))
+        return j.get("name", ""), j.get("device_info", {}).get("manufacturer", "") if isinstance(j.get("device_info"), dict) else ""
+    except Exception:
+        return "", ""
+
+
+def identify_device(ip, headers=None):
+    tz = probe_samsung(ip)
+    if tz:
+        return tz
+    blob, desc = _ssdp_info(ip, headers)
+    maker = _maker(desc.get("manufacturer", ""), desc.get("modelName", ""), desc.get("friendlyName", ""))
+    name = desc.get("friendlyName", "")
+    model = desc.get("modelName") or desc.get("modelNumber", "")
+    # webOS: إل جي وأي شركة ترخّص النظام منها
+    if "webos" in blob or "lge-com" in blob or maker == "LG":
+        return {"ip": ip, "brand": "lg", "maker": maker or "webOS TV", "name": name or "webOS TV", "model": model,
+                "os": "webOS", "devMode": port_open(ip, 9922), "rooted": port_open(ip, 22)}
+    adb, cast = port_open(ip, 5555, 0.6), port_open(ip, 8009, 0.6)
+    if adb or cast:
+        en, em = _eureka_name(ip) if cast else ("", "")
+        mk = maker or _maker(em, en) or ""
+        tvish = adb or (mk and mk != "Google TV") or "tv" in (name + en + model).lower()
+        if tvish:
+            return {"ip": ip, "brand": "android", "maker": mk or "Android TV", "name": name or en or "Android / Google TV",
+                    "model": model, "os": "Android TV", "adb": adb}
+    if maker and maker not in ("Google TV",):
+        return {"ip": ip, "brand": "other", "maker": maker, "name": name or maker, "model": model,
+                "os": "VIDAA" if "vidaa" in blob or maker == "Hisense" else "نظام آخر"}
+    return None
 
 
 def scan(deep=False):
@@ -222,7 +266,7 @@ def scan(deep=False):
 
         def check(host):
             h = str(host)
-            if any(port_open(h, p, 0.4) for p in (8001, 3000, 3001)):
+            if any(port_open(h, p, 0.4) for p in (8001, 3000, 3001, 5555, 8009)):
                 return h
             return None
 
@@ -231,16 +275,104 @@ def scan(deep=False):
                 if r:
                     candidates.add(r)
 
-    def identify(ip):
-        return probe_samsung(ip) or probe_lg(ip, ssdp.get(ip))
-
     devices = []
     with ThreadPoolExecutor(16) as ex:
-        for d in ex.map(identify, candidates):
+        for d in ex.map(lambda ip: identify_device(ip, ssdp.get(ip)), candidates):
             if d:
                 devices.append(d)
     devices.sort(key=lambda d: tuple(int(p) for p in d["ip"].split(".")))
     return devices
+
+
+# ---------------------------------------------------------------- أندرويد تي في / قوقل تي في (ADB)
+ADB_DIR = os.path.join(HOME, ".tv_manager_adb")
+ADB_ZIP = {
+    "win32": "https://dl.google.com/android/repository/platform-tools-latest-windows.zip",
+    "darwin": "https://dl.google.com/android/repository/platform-tools-latest-darwin.zip",
+}.get(sys.platform, "https://dl.google.com/android/repository/platform-tools-latest-linux.zip")
+PRIVATE_DNS = "dns.adguard-dns.com"
+_ADB_LOCK = threading.Lock()
+
+
+def find_adb(download=True, log=None):
+    p = shutil.which("adb")
+    if p:
+        return p
+    exe = os.path.join(ADB_DIR, "platform-tools", "adb.exe" if sys.platform == "win32" else "adb")
+    if os.path.isfile(exe):
+        return exe
+    if not download:
+        return None
+    with _ADB_LOCK:
+        if os.path.isfile(exe):
+            return exe
+        if log is not None:
+            log.append("أحمّل أداة ADB الرسمية من قوقل (مرة وحدة)…")
+        import zipfile
+        data = http_get(ADB_ZIP, 120)
+        os.makedirs(ADB_DIR, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            z.extractall(ADB_DIR)
+        if sys.platform != "win32":
+            os.chmod(exe, 0o755)
+    return exe
+
+
+def android_connect(ip, port, log):
+    adb = find_adb(log=log)
+    target = "%s:%s" % (ip, port or 5555)
+    out = _run([adb, "connect", target], 20)
+    log.append("$ adb connect " + target + "\n" + out)
+    low = out.lower()
+    if "unauthorized" in low or "authenticate" in low:
+        raise RuntimeError("ظهرت رسالة «السماح بتصحيح الأخطاء» على الشاشة؟ اختر «السماح دائماً» ثم أعد المحاولة.")
+    if "connected" not in low:
+        raise RuntimeError("ما قدرت أتصل. تأكد من تفعيل «تصحيح الأخطاء عبر الشبكة» أو «التصحيح اللاسلكي» ورقم المنفذ الظاهر.")
+    state = _run([adb, "-s", target, "get-state"], 10)
+    if "device" not in state:
+        raise RuntimeError("الشاشة تنتظر موافقتك: اختر «السماح» في الرسالة الظاهرة عليها ثم أعد المحاولة.")
+    return adb, target
+
+
+def android_pair(ip, port, code):
+    log = []
+    adb = find_adb(log=log)
+    out = _run([adb, "pair", "%s:%s" % (ip, port), code], 30)
+    log.append(out)
+    return "success" in out.lower(), log
+
+
+def android_install(ip, port, data, filename):
+    log = []
+    adb, target = android_connect(ip, port, log)
+    fd, path = tempfile.mkstemp(suffix=".apk")
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    try:
+        out = _run([adb, "-s", target, "install", "-r", path], 300)
+        log.append("$ adb install " + filename + "\n" + out)
+        return "success" in out.lower(), log
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def android_adblock(ip, port, enable):
+    log = []
+    adb, target = android_connect(ip, port, log)
+    if enable:
+        cmds = [["settings", "put", "global", "private_dns_mode", "hostname"],
+                ["settings", "put", "global", "private_dns_specifier", PRIVATE_DNS]]
+    else:
+        cmds = [["settings", "put", "global", "private_dns_mode", "off"]]
+    for c in cmds:
+        log.append("$ " + " ".join(c) + "\n" + _run([adb, "-s", target, "shell"] + c, 20))
+    mode = _run([adb, "-s", target, "shell", "settings", "get", "global", "private_dns_mode"], 10).strip()
+    ok = (mode == "hostname") if enable else (mode in ("off", "opportunistic", "null"))
+    log.append("وضع DNS الحالي: " + mode)
+    return ok, log
 
 
 # ---------------------------------------------------------------- تثبيت على سامسونج
@@ -750,6 +882,7 @@ class Panel(http.server.BaseHTTPRequestHandler):
             if q.get("k", [""])[0] != TOKEN:
                 return self._send(b"forbidden", "text/plain", 403)
             feats = {k: q.get(k, ["1"])[0] == "1" for k in screen.FEATURES}
+            feats["reciter"] = q.get("reciter", [""])[0]
             html = screen.page(int(q.get("country", ["0"])[0] or 0), int(q.get("city", ["0"])[0] or 0), features=feats,
                                photo_base="/screen-photo/", photo_suffix="?k=" + TOKEN,
                                keep_src="data:video/mp4;base64," + screen.KEEP_MP4_B64)
@@ -777,6 +910,9 @@ class Panel(http.server.BaseHTTPRequestHandler):
             })
         if u.path == "/api/dns":
             return self._json(DNS.status())
+        if u.path == "/api/quran/reciters":
+            return self._json({"reciters": [{"id": r["id"], "label": r["label"], "count": len(r["surahs"])}
+                                            for r in screen.quran_reciters()]})
         if u.path == "/api/photos":
             return self._json({"count": len(screen.photo_names())})
         self._json({"error": "غير موجود"}, 404)
@@ -803,8 +939,19 @@ class Panel(http.server.BaseHTTPRequestHandler):
                     ok, log = lg_install(ip, data, filename,
                                          self.headers.get("X-Mode", "dev"),
                                          self.headers.get("X-Secret", ""))
+                elif brand == "android":
+                    ok, log = android_install(ip, self.headers.get("X-Port", "5555"), data, filename)
                 else:
                     raise ValueError("نوع شاشة غير معروف.")
+                return self._json({"ok": ok, "log": log})
+            if path in ("/api/android/pair", "/api/android/adblock"):
+                req = json.loads(self._body() or b"{}")
+                ip = req.get("ip", "")
+                ipaddress.ip_address(ip)
+                if path.endswith("pair"):
+                    ok, log = android_pair(ip, int(req.get("port", 0)), str(req.get("code", "")).strip())
+                else:
+                    ok, log = android_adblock(ip, req.get("port") or "5555", bool(req.get("enable", True)))
                 return self._json({"ok": ok, "log": log})
             if path == "/api/screen/install":
                 req = json.loads(self._body() or b"{}")
@@ -921,7 +1068,7 @@ textarea{width:100%;min-height:7rem;direction:ltr;text-align:left;font-size:.9re
 .tv .face b{font-size:1.15rem;color:#fff;line-height:1.3}
 .tv .face small{opacity:.8;direction:ltr;text-align:right}
 .tv .body{padding:1rem;display:grid;gap:.7rem;align-content:start}
-.tv.samsung{--brand:var(--sam)} .tv.lg{--brand:var(--lg)}
+.tv.samsung{--brand:var(--sam)} .tv.lg{--brand:var(--lg)} .tv.android{--brand:#3ddc84} .tv.other{--brand:var(--muted)}
 .brand{font-weight:700;letter-spacing:.02em}
 .state{padding:.5rem .75rem;border-radius:8px;font-size:.92rem;border:1px solid}
 .state.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
@@ -958,7 +1105,7 @@ pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-ra
   <div class="hero">
     <div>
       <h1>مدير الشاشات الذكية</h1>
-      <p class="muted">يكتشف شاشات سامسونج و LG المتصلة بنفس الشبكة، يحجب إعلاناتها، يثبّت عليها تطبيقات من خارج المتجر، ويركّب عليها «شاشتي».</p>
+      <p class="muted">يكتشف الشاشات الذكية المتصلة بنفس الشبكة (تايزن، webOS، أندرويد وقوقل تي في)، يحجب إعلاناتها، يثبّت عليها تطبيقات من خارج المتجر، ويركّب عليها «شاشتي».</p>
     </div>
     <span class="pill"><span class="dot" id="dnsDot"></span><span id="dnsPill">حاجب الإعلانات متوقف</span></span>
   </div>
@@ -999,7 +1146,12 @@ pre.log{background:var(--screen);color:var(--screen-ink);padding:.7rem;border-ra
         <label><input type="checkbox" id="fHadith" checked onchange="saveFeats()"> أحاديث صحيح البخاري</label>
         <label><input type="checkbox" id="fMatches" checked onchange="saveFeats()"> مباريات اليوم</label>
         <label><input type="checkbox" id="fWeather" checked onchange="saveFeats()"> الطقس</label>
+        <label><input type="checkbox" id="fQuran" checked onchange="saveFeats()"> تلاوة القرآن الكريم</label>
       </div>
+      <div class="row" style="margin-top:.6rem">
+        <label>القارئ <select id="reciter" onchange="saveFeats()" style="max-width:30rem"><option value="">جارٍ تحميل القرّاء…</option></select></label>
+      </div>
+      <p class="muted" style="font-size:.85rem;margin:.3rem 0 0">التلاوات تُشغَّل مباشرة من موقع mp3quran.net، فتحتاج الشاشة اتصال إنترنت. على الشاشة: زر OK يفتح القائمة (تشغيل وإيقاف، اختيار السورة، متواصل أو سورة واحدة)، وزر التشغيل/الإيقاف في الريموت يشغّل ويوقف مباشرة.</p>
       <p class="muted" style="font-size:.85rem;margin:.4rem 0 0">الساعة والتاريخ ومواقيت الصلاة تظهر دائماً. الآيات والأحاديث تتبدّل كل ٥ دقائق.</p>
     </fieldset>
     <p class="muted" style="font-size:.92rem">تثبّتها من زر «ثبّت شاشتي» في بطاقة كل شاشة فوق. تفتحها من قائمة التطبيقات، وتغيّر المدينة من الشاشة نفسها بزر OK.</p>
@@ -1149,9 +1301,76 @@ function lgState(d) {
     <p class="muted">وضع المطور ينتهي بعد مدة؛ افتح التطبيق واضغط Extend لتمديده.</p></details>`;
 }
 
+function face(d) {
+  return `<div class="face">
+        <div><span class="brand">${esc(d.maker || '')}</span><br><b>${esc(d.name)}</b></div>
+        <small>${esc(d.model)}<br>${esc(d.ip)} · ${esc(d.os)}</small>
+      </div>`;
+}
+function cardAndroid(d, i) {
+  return `<article class="tv android">
+      ${face(d)}
+      <div class="body">
+        ${d.adb ? '<div class="state ok">تصحيح الأخطاء عبر الشبكة (ADB) شغّال في الشاشة.</div>'
+                : `<div class="state warn">لازم تفعّل تصحيح الأخطاء في الشاشة مرة وحدة.</div>`}
+        <details${d.adb ? '' : ' open'}><summary>طريقة التفعيل</summary><ol>
+          <li>الإعدادات ← تفضيلات الجهاز (أو النظام) ← حول ← اضغط على «إصدار نظام Android TV» أو «البنية» ٧ مرات لين يظهر «أنت الآن مطوّر».</li>
+          <li>ارجع للإعدادات ← خيارات المطوّر، وفعّل «تصحيح أخطاء USB» و«تصحيح الأخطاء عبر الشبكة» إن وجد.</li>
+          <li>في قوقل تي في الأحدث: فعّل «تصحيح الأخطاء اللاسلكي»، ثم «إقران جهاز برمز»، واكتب المنفذ والرمز الظاهرين تحت.</li>
+          <li>أول اتصال تطلع رسالة على الشاشة: اختر «السماح دائماً من هذا الكمبيوتر».</li></ol></details>
+        <div class="row">
+          <label>منفذ الاتصال <input id="aport${i}" value="5555" style="direction:ltr;width:6rem" autocomplete="off"></label>
+          <label>منفذ الإقران <input id="ppport${i}" placeholder="اختياري" style="direction:ltr;width:6rem" autocomplete="off"></label>
+          <label>رمز الإقران <input id="pcode${i}" placeholder="اختياري" style="direction:ltr;width:7rem" autocomplete="off"></label>
+          <button onclick="androidPair(${i})">اقترن</button>
+        </div>
+        <div class="row">
+          <input type="file" id="file${i}" accept=".apk" aria-label="ملف التطبيق">
+          <button class="primary" id="inst${i}" onclick="install(${i})">ثبّت التطبيق</button>
+        </div>
+        <p class="muted" style="font-size:.88rem">ملفات ‎.apk — مثل SmartTube ليوتيوب بدون إعلانات. حمّلها من مواقعها الرسمية فقط.</p>
+        <div class="row">
+          <button class="primary" onclick="androidAdblock(${i}, true)">فعّل حجب الإعلانات الدائم</button>
+          <button onclick="androidAdblock(${i}, false)">ألغِ الحجب</button>
+        </div>
+        <p class="muted" style="font-size:.88rem">يضبط «DNS الخاص» في الشاشة على خادم AdGuard المجاني (<span dir="ltr">dns.adguard-dns.com</span>)، ويشتغل دائماً بدون الكمبيوتر. وتقدر تسويه يدوياً من: الإعدادات ← الشبكة ← DNS الخاص.</p>
+        <div class="state warn">«شاشتي» لشاشات أندرويد تجي مع نسخة الأندرويد من البرنامج.</div>
+        <pre class="log" id="log${i}" hidden></pre>
+      </div>
+    </article>`;
+}
+function cardOther(d, i) {
+  return `<article class="tv other">
+      ${face(d)}
+      <div class="body">
+        <div class="state warn">نظام هذي الشاشة (${esc(d.os)}) مغلق، وما يسمح بتثبيت تطبيقات خارجية أو «شاشتي».</div>
+        <details open><summary>منع الإعلانات عليها</summary><ol>
+          <li>ادخل إعدادات الشبكة في الشاشة، ودوّر على DNS أو «إعدادات IP» واختر «يدوي».</li>
+          <li>اكتب <b dir="ltr">94.140.14.14</b> (والثاني <b dir="ltr">94.140.15.15</b>) واحفظ.</li>
+          <li>إذا ما فيه خيار DNS في الشاشة، حط نفس الرقمين في إعدادات DNS داخل المودم، ويشمل كل أجهزة البيت.</li></ol></details>
+      </div>
+    </article>`;
+}
+async function androidPair(i) {
+  const d = DEVS[i], log = $('log' + i); log.hidden = false;
+  const port = $('ppport' + i).value.trim(), code = $('pcode' + i).value.trim();
+  if (!port || !code) { log.textContent = 'اكتب منفذ ورمز الإقران من شاشة «إقران جهاز برمز».'; return; }
+  log.textContent = 'أقترن بالشاشة…';
+  const j = await api('/api/android/pair', {method: 'POST', body: JSON.stringify({ip: d.ip, port, code})});
+  log.textContent = j.error || ((j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم الإقران. اكتب منفذ الاتصال الظاهر في «التصحيح اللاسلكي» ثم ثبّت.' : 'ما نجح الإقران. تأكد من الرمز والمنفذ.'));
+}
+async function androidAdblock(i, enable) {
+  const d = DEVS[i], log = $('log' + i); log.hidden = false;
+  log.textContent = enable ? 'أفعّل حجب الإعلانات…' : 'ألغي الحجب…';
+  const j = await api('/api/android/adblock', {method: 'POST', body: JSON.stringify({ip: d.ip, port: $('aport' + i).value.trim(), enable})});
+  log.textContent = j.error || ((j.log || []).join('\n') + '\n\n' + (j.ok ? (enable ? 'تم. الحجب صار دائم على هذي الشاشة.' : 'تم إلغاء الحجب.') : 'ما اكتمل. شوف التفاصيل فوق.'));
+}
+
 function render() {
   if (!DEVS.length) { $('tvs').innerHTML = '<div class="empty muted">ما فيه شاشات بعد.</div>'; return; }
   $('tvs').innerHTML = DEVS.map((d, i) => {
+    if (d.brand === 'android') return cardAndroid(d, i);
+    if (d.brand === 'other') return cardOther(d, i);
     const sam = d.brand === 'samsung';
     const needs = sam
       ? (INFO.sdb ? '' : '<div class="state warn">للتثبيت على سامسونج لازم Tizen Studio (أداة sdb) على هذا الكمبيوتر.</div>')
@@ -1161,10 +1380,7 @@ function render() {
         <input id="secret${i}" placeholder="Passphrase أو كلمة مرور الروت" style="direction:ltr" autocomplete="off">
       </div>`;
     return `<article class="tv ${d.brand}">
-      <div class="face">
-        <div><span class="brand">${sam ? 'Samsung' : 'LG'}</span><br><b>${esc(d.name)}</b></div>
-        <small>${esc(d.model)}<br>${esc(d.ip)} · ${esc(d.os)}</small>
-      </div>
+      ${face(d)}
       <div class="body">
         ${sam ? samsungState(d) : lgState(d)}
         ${needs}
@@ -1200,6 +1416,7 @@ async function install(i) {
   log.hidden = false;
   if (!f) { log.textContent = 'اختر ملف التطبيق أولاً.'; return; }
   const headers = {'X-Brand': d.brand, 'X-Ip': d.ip, 'X-Filename': encodeURIComponent(f.name)};
+  if (d.brand === 'android') headers['X-Port'] = $('aport' + i).value.trim() || '5555';
   if (d.brand === 'lg') {
     headers['X-Mode'] = $('mode' + i).value;
     headers['X-Secret'] = $('secret' + i).value.trim();
@@ -1213,8 +1430,18 @@ async function install(i) {
   log.textContent = (j.log || []).join('\n') + '\n\n' + (j.ok ? 'تم التثبيت. تلقاه في قائمة التطبيقات بالشاشة.' : 'ما اكتمل التثبيت. شوف التفاصيل فوق.');
 }
 
-const FEAT_IDS = {verses: 'fVerses', hadith: 'fHadith', matches: 'fMatches', weather: 'fWeather'};
-function feats() { const o = {}; for (const k in FEAT_IDS) o[k] = $(FEAT_IDS[k]).checked; return o; }
+const FEAT_IDS = {verses: 'fVerses', hadith: 'fHadith', matches: 'fMatches', weather: 'fWeather', quran: 'fQuran'};
+function feats() { const o = {}; for (const k in FEAT_IDS) o[k] = $(FEAT_IDS[k]).checked; o.reciter = $('reciter').value || (() => { try { return JSON.parse(localStorage.getItem('tvm_feats') || '{}').reciter || ''; } catch (e) { return ''; } })(); return o; }
+async function loadReciters() {
+  const j = await api('/api/quran/reciters');
+  const list = j.reciters || [];
+  let saved = '';
+  try { saved = (JSON.parse(localStorage.getItem('tvm_feats') || '{}').reciter) || ''; } catch (e) {}
+  if (!list.length) { $('reciter').innerHTML = '<option value="">تعذّر تحميل القرّاء — تأكد من الإنترنت</option>'; return; }
+  let def = list.find(r => r.label.includes('العفاسي') && r.label.includes('حفص'));
+  $('reciter').innerHTML = list.map(r => `<option value="${r.id}">${esc(r.label)}${r.count < 114 ? ' (' + r.count + ' سورة)' : ''}</option>`).join('');
+  $('reciter').value = saved && list.some(r => String(r.id) === String(saved)) ? saved : (def ? def.id : list[0].id);
+}
 function saveFeats() { try { localStorage.setItem('tvm_feats', JSON.stringify(feats())); } catch (e) {} }
 function loadFeats() {
   try { const o = JSON.parse(localStorage.getItem('tvm_feats') || '{}'); for (const k in FEAT_IDS) if (k in o) $(FEAT_IDS[k]).checked = !!o[k]; } catch (e) {}
@@ -1229,7 +1456,7 @@ async function previewScreen() {
   const w = window.open('', '_blank');
   const f = feats();
   const url = '/screen-preview?k=' + encodeURIComponent(K) + '&country=' + screenCountry() + '&city=' + screenCity() +
-    Object.keys(f).map(k => '&' + k + '=' + (f[k] ? 1 : 0)).join('');
+    Object.keys(f).map(k => '&' + k + '=' + (k === 'reciter' ? encodeURIComponent(f[k]) : (f[k] ? 1 : 0))).join('');
   const c = await api('/api/photos');
   if (!c.count) {
     if (w) w.document.write('<meta charset="utf-8"><body style="background:#111;color:#eee;font-family:sans-serif;display:grid;place-items:center;height:90vh" dir="rtl"><h2>أحمّل صور الخلفية لأول مرة… دقيقة وحدة</h2></body>');
@@ -1351,6 +1578,7 @@ async function saveLists() {
 }
 
 loadFeats();
+loadReciters();
 loadInfo().then(() => scan(false));
 photoCount();
 api('/api/dns').then(paintDns);
