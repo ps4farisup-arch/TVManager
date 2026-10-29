@@ -90,6 +90,11 @@ jobs:
                   }
               }
           }
+
+          dependencies {
+              // اتصال SSH بشاشات webOS من الجوال (بديل paramiko على أندرويد)
+              implementation("com.github.mwiede:jsch:0.2.18")
+          }
           TVM_EOF
           mkdir -p "android/app/src/main"
           cat > "android/app/src/main/AndroidManifest.xml" <<'TVM_EOF'
