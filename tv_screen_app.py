@@ -211,7 +211,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;col
 <div id="credit"></div>
 <video id="keep" muted loop playsinline autoplay style="position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none"></video>
 <div id="qbar"><span class="eq" id="qIcon">▶</span><b>القرآن الكريم</b><span id="qText"></span></div>
-<audio id="qa" preload="none"></audio>
+<audio id="qa" preload="auto"></audio>
 <div id="hint">اضغط OK للقائمة</div>
 <div id="picker"><h2 id="pickTitle">اختر دولتك</h2><div id="list"></div></div>
 <script src="$WEBAPIS/webapis/webapis.js"></script>
@@ -576,10 +576,13 @@ function keepAwake(){
     });
   }
   var v = $('keep');
-  if (CFG.keep && v){
-    if (!v.src) v.src = CFG.keep;
-    try { var pr = v.play(); if (pr && pr['catch']) pr['catch'](function(){}); } catch(e){}
+  if (!CFG.keep || !v) return;
+  if (typeof qUser !== 'undefined' && qUser){             // الصوت شغّال: نوقف الفيديو المخفي عشان ما ينافسه
+    try { v.pause(); } catch(e){}
+    return;
   }
+  if (!v.src) v.src = CFG.keep;
+  try { var pr = v.play(); if (pr && pr['catch']) pr['catch'](function(){}); } catch(e){}
 }
 
 function drift(){
@@ -590,6 +593,7 @@ function drift(){
 
 /* القرآن الكريم: أكثر من قارئ */
 var Q = CFG.quran, qPlaying = false, qMode = sget('qmode') || 'cont', qIdx = 0, qRec = 0;
+var qUser = false, qLastT = 0, qLastMove = 0, qRetry = 0, qTimer = null, qBuf = false;
 if (Q && !(Q.recs && Q.recs.length)) Q = null;
 function R(){ return Q.recs[qRec]; }
 if (Q){
@@ -602,17 +606,44 @@ function qPaint(){
   if (!Q) return;
   $('qbar').style.display = 'block';
   $('qbar').className = qPlaying ? 'on' : '';
-  $('qIcon').innerHTML = qPlaying ? '♪' : '▶';
+  $('qIcon').innerHTML = qPlaying ? (qBuf ? '…' : '♪') : '▶';
   $('qText').innerHTML = R().name + ' · ' + sName(R().surahs[qIdx]) + (qMode === 'cont' ? ' · متواصل' : '');
 }
 function qPlay(){
   if (!Q) return;
   var a = $('qa'), u = qUrl(R().surahs[qIdx]);
-  if (a.getAttribute('data-src') !== u){ a.src = u; a.setAttribute('data-src', u); }
-  try { var pr = a.play(); if (pr && pr['catch']) pr['catch'](function(){ qPlaying = false; qPaint(); }); } catch(e){}
+  qUser = true; qRetry = 0; qLastMove = Date.now();
+  keepAwake();                                            // يوقف الفيديو المخفي
+  if (a.getAttribute('data-src') !== u){ a.src = u; a.setAttribute('data-src', u); qLastT = 0; }
+  qTry();
   qPlaying = true; sset('qsurah', R().surahs[qIdx]); qPaint();
 }
-function qPause(){ try { $('qa').pause(); } catch(e){} qPlaying = false; qPaint(); }
+function qTry(){
+  var a = $('qa');
+  try { var pr = a.play(); if (pr && pr['catch']) pr['catch'](function(){ qSoon(qReload, 2000); }); } catch(e){ qSoon(qReload, 2000); }
+}
+function qSoon(fn, ms){ clearTimeout(qTimer); qTimer = setTimeout(fn, ms); }
+function qReload(){                                       // انقطع البث: نعيد الاتصال ونكمل من نفس الموضع
+  if (!qUser) return;
+  qRetry++;
+  var a = $('qa'), u = qUrl(R().surahs[qIdx]), pos = qLastT;
+  qBuf = true; qPaint();
+  try { a.pause(); } catch(e){}
+  a.src = u; a.setAttribute('data-src', u);
+  var seek = function(){
+    a.removeEventListener('loadedmetadata', seek);
+    try { if (pos > 2) a.currentTime = pos - 1; } catch(e){}
+  };
+  a.addEventListener('loadedmetadata', seek);
+  try { a.load(); } catch(e){}
+  qLastMove = Date.now();
+  qTry();
+}
+function qPause(){
+  qUser = false; clearTimeout(qTimer);
+  try { $('qa').pause(); } catch(e){}
+  qPlaying = false; qBuf = false; qPaint(); keepAwake();
+}
 function qToggle(){ if (qPlaying) qPause(); else qPlay(); }
 function qStep(d){ if (!Q) return; var n = R().surahs.length; qIdx = (qIdx + d + n) % n; if (qPlaying) qPlay(); else { sset('qsurah', R().surahs[qIdx]); qPaint(); } }
 function setRec(i){
@@ -622,10 +653,30 @@ function setRec(i){
   $('qa').removeAttribute('data-src');
   if (qPlaying) qPlay(); else qPaint();
 }
-$('qa').addEventListener('ended', function(){
-  if (qMode === 'cont'){ qIdx = (qIdx + 1) % R().surahs.length; qPlay(); } else { qPlaying = false; qPaint(); }
-});
-$('qa').addEventListener('error', function(){ if (qPlaying){ qPlaying = false; qPaint(); } });
+(function(){
+  var a = $('qa');
+  a.addEventListener('ended', function(){
+    if (!qUser) return;
+    if (qMode === 'cont'){ qIdx = (qIdx + 1) % R().surahs.length; qPlay(); }
+    else { qUser = false; qPlaying = false; qPaint(); keepAwake(); }
+  });
+  a.addEventListener('timeupdate', function(){
+    if (a.currentTime !== qLastT){ qLastT = a.currentTime; qLastMove = Date.now(); if (qBuf){ qBuf = false; qPaint(); } }
+  });
+  a.addEventListener('playing', function(){ qRetry = 0; qBuf = false; qPaint(); });
+  a.addEventListener('waiting', function(){ if (qUser){ qBuf = true; qPaint(); } });
+  // النظام أوقف الصوت بدون طلبك (فيديو آخر، انقطاع شبكة…) → نرجّعه
+  a.addEventListener('pause', function(){ if (qUser && !a.ended) qSoon(qTry, 1500); });
+  a.addEventListener('error', function(){ if (qUser) qSoon(qReload, Math.min(30000, 2000 * (qRetry + 1))); });
+  a.addEventListener('stalled', function(){ if (qUser) qSoon(qReload, 8000); });
+  // مراقب: إذا الصوت واقف أو ما يتقدم والمفروض شغّال، نصلحه
+  setInterval(function(){
+    if (!qUser) return;
+    if (a.ended) return;
+    if (a.paused) qTry();
+    else if (Date.now() - qLastMove > 25000) qReload();
+  }, 10000);
+})();
 
 /* القائمة والإعدادات على الشاشة */
 var SECT = [['verses', 'آيات قرآنية'], ['hadith', 'أحاديث صحيح البخاري'], ['matches', 'مباريات اليوم'], ['weather', 'الطقس']];
