@@ -1793,13 +1793,23 @@ function head(d) {
     <small><span class="ltr">${esc(d.model)}${d.model ? ' · ' : ''}${esc(d.ip)}</span></small></div><span class="tag">${esc(d.maker || '')} · ${esc(d.os)}</span></div>`;
 }
 function samsungState(d) {
-  if (!d.devMode) return `<div class="pill bad">وضع المطور غير مفعّل — لازم تفعّله قبل التثبيت.</div>
-    <details class="more" open><summary>طريقة التفعيل</summary><div class="in"><ol>
-    <li>افتح «التطبيقات» في الشاشة واضغط بالريموت <b>12345</b>.</li>
-    <li>فعّل Developer Mode واكتب هذا الرقم: <b class="ltr">${esc(INFO.ip)}</b></li>
-    <li>أطفئ الشاشة وشغّلها، ثم ابحث عن الشاشات مرة ثانية.</li></ol></div></details>`;
-  if (d.devIP && d.devIP !== INFO.ip) return `<div class="pill warn">وضع المطور مربوط بجهاز آخر (<span class="ltr">${esc(d.devIP)}</span>). غيّره إلى <b class="ltr">${esc(INFO.ip)}</b> بطريقة 12345.</div>`;
-  return '<div class="pill ok">وضع المطور مفعّل ومربوط بهذا الجهاز.</div>';
+  const steps = ip => `<details class="more"${d.devMode ? '' : ' open'}><summary>طريقة تفعيل وضع المطور</summary><div class="in"><ol>
+    <li>افتح «التطبيقات» في الشاشة واضغط بالريموت <b>12345</b> (أو من لوحة الأرقام على الشاشة).</li>
+    <li>فعّل Developer Mode، واكتب في خانة IP: <b class="ltr">${esc(ip)}</b></li>
+    <li>أطفئ الشاشة من الزر وشغّلها، ثم ابحث عن الشاشات مرة ثانية.</li></ol></div></details>`;
+  const noIp = !d.devIP || d.devIP === '0.0.0.0';
+  if (INFO.android) {
+    return `<div class="pill warn">شاشات سامسونج تشترط توقيع أي تطبيق بشهادة سامسونج، وهذي الأدوات تشتغل على الكمبيوتر فقط. التثبيت عليها يكون من برنامج الكمبيوتر.</div>
+      <details class="more"><summary>وش أسوي؟</summary><div class="in"><ol>
+        <li>شغّل TVManager.exe على كمبيوتر متصل بنفس الشبكة.</li>
+        <li>فعّل وضع المطور في الشاشة (التطبيقات ← 12345) واكتب <b>رقم IP الكمبيوتر</b> — يظهر في برنامج الكمبيوتر — مو رقم الجوال.</li>
+        <li>بعدها ثبّت «شاشتي» من برنامج الكمبيوتر.</li>
+        <li>منع الإعلانات تقدر تسويه الحين بدون كمبيوتر من تبويب «الإعلانات».</li></ol></div></details>`;
+  }
+  if (!d.devMode) return '<div class="pill bad">وضع المطور غير مفعّل — لازم تفعّله قبل التثبيت.</div>' + steps(INFO.ip);
+  if (noIp) return '<div class="pill warn">وضع المطور مفعّل لكن ما فيه رقم جهاز مربوط فيه.</div>' + steps(INFO.ip);
+  if (d.devIP !== INFO.ip) return `<div class="pill warn">وضع المطور مربوط بجهاز ثاني (<span class="ltr">${esc(d.devIP)}</span>). غيّره إلى <b class="ltr">${esc(INFO.ip)}</b>.</div>` + steps(INFO.ip);
+  return '<div class="pill ok">وضع المطور مفعّل ومربوط بهذا الكمبيوتر.</div>';
 }
 function lgState(d) {
   if (d.devMode) return '<div class="pill ok">تطبيق Developer Mode شغّال في الشاشة.</div>';
@@ -1815,7 +1825,7 @@ function lgState(d) {
 function cardWebosTizen(d, i) {
   const sam = d.brand === 'samsung';
   if (sam && INFO.android) return `<article class="tv samsung">${head(d)}<div class="tv-body">${samsungState(d)}
-      <div class="pill warn">التثبيت على شاشات تايزن يحتاج أدوات سامسونج، ويتم من برنامج الكمبيوتر.</div></div></article>`;
+      <button class="btn" onclick="show('v-ads')">منع الإعلانات على هذي الشاشة</button></div></article>`;
   const needs = sam ? (INFO.sdb ? '' : '<div class="pill warn">للتثبيت على سامسونج لازم Tizen Studio على هذا الكمبيوتر.</div>')
     : (INFO.paramiko ? '' : (INFO.android
         ? `<div class="pill bad">مكتبة الاتصال ما اشتغلت: <span class="ltr">${esc(INFO.paramikoErr)}</span></div>`
