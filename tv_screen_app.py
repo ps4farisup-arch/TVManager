@@ -176,7 +176,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070f;col
 #verse.hadith{font-size:1.9vw}
 
 #credit{position:fixed;bottom:.9vh;left:4vw;font-size:.8vw;opacity:.6;direction:rtl;text-align:left;max-width:70vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#qbar{position:fixed;top:4.6vh;left:50%;-webkit-transform:translateX(-50%);transform:translateX(-50%);display:none;
+#qbar{position:fixed;top:16vh;left:50%;-webkit-transform:translateX(-50%);transform:translateX(-50%);display:none;
   background:rgba(14,12,9,.55);border:1px solid rgba(217,180,106,.35);border-radius:3vw;padding:.55vw 1.5vw;font-size:1.15vw;white-space:nowrap;text-shadow:none}
 #qbar b{color:#d9b46a;font-weight:600;margin-left:.6vw}
 #qbar .eq{display:inline-block;width:1.1vw;text-align:center;color:#d9b46a;margin-left:.5vw}
