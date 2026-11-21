@@ -614,7 +614,14 @@ function qPlay(){
   var a = $('qa'), u = qUrl(R().surahs[qIdx]);
   qUser = true; qRetry = 0; qLastMove = Date.now();
   keepAwake();                                            // يوقف الفيديو المخفي
-  if (a.getAttribute('data-src') !== u){ a.src = u; a.setAttribute('data-src', u); qLastT = 0; }
+  if (a.getAttribute('data-src') !== u){
+    a.src = u; a.setAttribute('data-src', u); qLastT = 0;
+    var sp = sget('qpos');                                // نكمل من حيث وقفت آخر مرة (لو طفى التلفزيون)
+    if (sp && sp.u === u && sp.t > 5){
+      var go = function(){ a.removeEventListener('loadedmetadata', go); try { a.currentTime = sp.t - 3; } catch(e){} };
+      a.addEventListener('loadedmetadata', go);
+    }
+  }
   qTry();
   qPlaying = true; sset('qsurah', R().surahs[qIdx]); qPaint();
 }
@@ -656,12 +663,14 @@ function setRec(i){
 (function(){
   var a = $('qa');
   a.addEventListener('ended', function(){
+    sset('qpos', null);
     if (!qUser) return;
     if (qMode === 'cont'){ qIdx = (qIdx + 1) % R().surahs.length; qPlay(); }
     else { qUser = false; qPlaying = false; qPaint(); keepAwake(); }
   });
   a.addEventListener('timeupdate', function(){
     if (a.currentTime !== qLastT){ qLastT = a.currentTime; qLastMove = Date.now(); if (qBuf){ qBuf = false; qPaint(); } }
+    if (Date.now() - (a._saved || 0) > 10000){ a._saved = Date.now(); sset('qpos', {u: a.getAttribute('data-src'), t: Math.floor(a.currentTime)}); }
   });
   a.addEventListener('playing', function(){ qRetry = 0; qBuf = false; qPaint(); });
   a.addEventListener('waiting', function(){ if (qUser){ qBuf = true; qPaint(); } });
